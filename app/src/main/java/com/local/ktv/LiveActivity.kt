@@ -96,7 +96,6 @@ class LiveActivity : Activity() {
                 topMargin = 24
                 marginEnd = 28
                 gravity = Gravity.TOP or Gravity.END
-                marginRight = 28
             }
         }
         exitBtn = exitView

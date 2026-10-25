@@ -50,7 +50,7 @@ class DownloadProgressActivity : Activity() {
 
         val outer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         outer.addView(title)
-        outer.addView(scroll, ViewGroup.LayoutParams(-1, 0, 1f))
+        outer.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
         val root = FrameLayout(this)
         root.addView(outer)
