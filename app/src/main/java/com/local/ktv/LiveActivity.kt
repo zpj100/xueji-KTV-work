@@ -2,6 +2,7 @@ package com.local.ktv
 
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -9,9 +10,12 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.SurfaceView
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.media3.common.MediaItem
@@ -32,8 +36,9 @@ class LiveActivity : Activity() {
     private var surface: SurfaceView? = null
     private var root: FrameLayout? = null
     private var mark: TextView? = null
-    private var logo: TextView? = null
     private var exitBtn: TextView? = null
+    private var panel: LinearLayout? = null
+    private val panelItems = ArrayList<TextView>()
     private var chIndex = 0
     private var sources = ArrayList<String>()
     private var srcIndex = 0
@@ -41,6 +46,11 @@ class LiveActivity : Activity() {
     private var videoW = 0
     private var videoH = 0
     private val timeout = Runnable { autoSwitch("起播超时10s") }
+
+    /** 左侧电视台列表 10 秒无操作自动隐藏。 */
+    private val hidePanelTask = Runnable { hideChannelPanel() }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,33 +63,18 @@ class LiveActivity : Activity() {
         )
         surface = surfaceView
         rootView.addView(surfaceView)
+
+        // 左上角台标（当前频道名）
         val markView = TextView(this).apply {
             setTextColor(Color.WHITE)
             textSize = 14f
+            setShadowLayer(6f, 0f, 0f, Color.BLACK)
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { leftMargin = 28; topMargin = 24 }
         }
         mark = markView
         rootView.addView(markView)
-
-        // 左上角台标（频道/电台标识）
-        val logoView = TextView(this).apply {
-            text = "学记KTV"
-            setTextColor(Color.WHITE)
-            textSize = 18f
-            setShadowLayer(6f, 0f, 0f, Color.BLACK)
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                leftMargin = 28
-                topMargin = 24
-                gravity = Gravity.TOP or Gravity.START
-                marginStart = 28
-            }
-        }
-        logo = logoView
-        rootView.addView(logoView)
 
         // 右上角透明「退出全屏」按钮
         val exitView = TextView(this).apply {
@@ -117,8 +112,140 @@ class LiveActivity : Activity() {
             finish()
             return
         }
+        buildChannelPanel()
         buildPlayer()
         loadChannel(chIndex)
+    }
+
+    /** 构建左侧「电视台」列表 + 调出按钮。默认隐藏，10 秒无操作自动隐藏。 */
+    private fun buildChannelPanel() {
+        val host = root ?: return
+        val panelBg = GradientDrawable().apply {
+            setColor(Color.parseColor("#CC000000"))
+            cornerRadius = dp(12).toFloat()
+        }
+        val panelView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = panelBg
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            layoutParams = FrameLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.MATCH_PARENT).apply {
+                gravity = Gravity.START or Gravity.TOP
+                leftMargin = dp(16)
+                topMargin = dp(64)
+                bottomMargin = dp(92)
+            }
+            visibility = View.GONE
+        }
+        val header = TextView(this).apply {
+            text = "电视台"
+            setTextColor(Color.parseColor("#FFDDA0"))
+            textSize = 17f
+            setPadding(dp(8), dp(4), dp(8), dp(8))
+        }
+        panelView.addView(header)
+
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        for (i in channels.indices) {
+            val item = TextView(this).apply {
+                text = channels[i][0]
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                isFocusable = true
+                isFocusableInTouchMode = true
+                isClickable = true
+                setOnClickListener { selectChannel(i) }
+                setOnFocusChangeListener { v, hasFocus ->
+                    if (hasFocus) {
+                        v.setBackgroundColor(Color.parseColor("#66FFA500"))
+                        resetPanelTimer()
+                    } else {
+                        v.setBackgroundColor(
+                            if (i == chIndex) Color.parseColor("#55FF8C00") else Color.TRANSPARENT
+                        )
+                    }
+                }
+            }
+            list.addView(item, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(2) })
+            panelItems.add(item)
+        }
+        val scroll = ScrollView(this)
+        scroll.addView(list, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
+        panelView.addView(scroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f,
+        ))
+        panel = panelView
+        host.addView(panelView)
+        refreshPanelSelection()
+
+        // 调出按钮（左下角，始终位于最上层，点击切换列表显隐）
+        val toggleBtn = TextView(this).apply {
+            text = "☰ 电视台"
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            setPadding(dp(16), dp(9), dp(16), dp(9))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#99000000"))
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(1), Color.parseColor("#66FFFFFF"))
+            }
+            isFocusable = false
+            isClickable = true
+            setOnClickListener { toggleChannelPanel() }
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.START
+                leftMargin = dp(20)
+                bottomMargin = dp(20)
+            }
+        }
+        host.addView(toggleBtn)
+    }
+
+    private fun refreshPanelSelection() {
+        for (i in panelItems.indices) {
+            val item = panelItems[i]
+            if (!item.hasFocus()) {
+                item.setBackgroundColor(
+                    if (i == chIndex) Color.parseColor("#55FF8C00") else Color.TRANSPARENT
+                )
+            }
+        }
+    }
+
+    private fun selectChannel(index: Int) {
+        if (index !in channels.indices) return
+        loadChannel(index)
+        refreshPanelSelection()
+        hideChannelPanel()
+        Toast.makeText(this, "已切到 ${channels[index][0]}", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showChannelPanel() {
+        panel?.visibility = View.VISIBLE
+        panelItems.getOrNull(chIndex)?.requestFocus()
+        resetPanelTimer()
+    }
+
+    private fun hideChannelPanel() {
+        handler.removeCallbacks(hidePanelTask)
+        panel?.visibility = View.GONE
+    }
+
+    private fun resetPanelTimer() {
+        if (panel?.visibility == View.VISIBLE) {
+            handler.removeCallbacks(hidePanelTask)
+            handler.postDelayed(hidePanelTask, 10_000)
+        }
+    }
+
+    private fun toggleChannelPanel() {
+        if (panel?.visibility == View.VISIBLE) hideChannelPanel() else showChannelPanel()
     }
 
     private fun buildPlayer() {
@@ -180,6 +307,7 @@ class LiveActivity : Activity() {
         srcIndex = sources.indexOf(ch[1]).coerceAtLeast(0)
         failStreak = 0
         tried.clear()
+        refreshPanelSelection()
         playSource(srcIndex)
     }
 
@@ -237,20 +365,36 @@ class LiveActivity : Activity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
+            val panelVisible = panel?.visibility == View.VISIBLE
             when (event.keyCode) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                    finish(); return true
+                    if (panelVisible) {
+                        hideChannelPanel()
+                    } else {
+                        finish()
+                    }
+                    return true
+                }
+                KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> {
+                    toggleChannelPanel(); return true
                 }
                 KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_CHANNEL_DOWN,
                 KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    switchChannel(1); return true
+                    // 列表显示时交给系统做焦点导航，避免误切台
+                    if (!panelVisible) {
+                        switchChannel(1); return true
+                    }
                 }
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_CHANNEL_UP,
                 KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_DPAD_UP -> {
-                    switchChannel(-1); return true
+                    if (!panelVisible) {
+                        switchChannel(-1); return true
+                    }
                 }
-                KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                    manualNextSource(); return true
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                    if (!panelVisible) {
+                        manualNextSource(); return true
+                    }
                 }
             }
         }
@@ -286,7 +430,7 @@ class LiveActivity : Activity() {
     }
 
     companion object {
-        private const val UA = "Mozilla/5.0 (Linux; Android 4.4) MaidongKTV/2.1.1"
+        private const val UA = "Mozilla/5.0 (Linux; Android 4.4) XuejiKTV/2.1.3"
 
         private fun splitJsonArray(raw: String?): List<String> {
             val out = ArrayList<String>()

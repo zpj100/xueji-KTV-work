@@ -23,3 +23,7 @@ tools/__pycache__/
 
 # Downloaded decoder regression media
 app/src/debug/assets/decoder-samples/*.mkv
+
+# WorkBuddy 项目内部数据/本地脚本
+.workbuddy/
+rules-template.md
