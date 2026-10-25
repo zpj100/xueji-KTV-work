@@ -1,0 +1,25 @@
+.gradle/
+.kotlin/
+.idea/
+local.properties
+**/build/
+app/release/
+*.apk
+/*.png
+/*.xml
+/*.log
+/*.txt
+.codex-*
+captures/
+**/captures/
+*.xml.bak
+gradle.properties
+
+
+# Temp files
+tools/__pycache__/
+**/__history/
+*.jks
+
+# Downloaded decoder regression media
+app/src/debug/assets/decoder-samples/*.mkv
