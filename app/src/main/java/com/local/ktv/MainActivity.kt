@@ -8022,9 +8022,18 @@ class MainActivity : AppCompatActivity() {
                 },
             )
             1 -> listOf(
-                SettingsEntry(R.drawable.ott_ic_data_upgrade, "曲库", "数据库 ${library.muse.songCount()} 首  本地已下载 ${countDownloadedFiles()} 首", "更新") {
+                SettingsEntry(R.drawable.ott_ic_data_upgrade, "曲库",
+                    "数据库 ${library.muse.songCount()} 首  本地已下载 ${countDownloadedFiles()} 首  ·  i歌霸${
+                        IgebaAccount.session?.let { "已登录：${it.nickname}" } ?: "未登录"
+                    }", "更新") {
                     updateIgebaCatalog()
                 },
+                SettingsEntry(
+                    R.drawable.ott_ic_about_us,
+                    "i歌霸账号",
+                    IgebaAccount.session?.let { "已登录：${it.nickname}" } ?: "登录或注册自己的账号，用于曲库更新与新歌播放",
+                    "设置",
+                ) { IgebaAccountDialog.show(this) { showSettingsSection(1, false) } },
                 SettingsEntry(R.drawable.ott_ic_data_setting,
                     if (store.downloadToOpenList) "网盘加歌" else "U盘加歌",
                     if (store.downloadToOpenList) "扫描网盘歌曲目录并加入曲库检索" else "扫描 maidongktv 歌曲保存目录",

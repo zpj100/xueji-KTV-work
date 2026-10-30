@@ -11,6 +11,17 @@
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
     </style>
 
+    <!-- 右侧半透明悬浮面板主题（下载进度浮窗） -->
+    <style name="Theme.Ktv.Floating" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowActionBarOverlay">true</item>
+    </style>
+
     <!-- 无动画 Activity 主题 -->
     <style name="ActivityNoAnimation" parent="@style/Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@drawable/bg_window</item>
