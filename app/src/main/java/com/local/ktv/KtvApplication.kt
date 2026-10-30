@@ -9,6 +9,7 @@ class KtvApplication : Application() {
         instanceRef = this
         PersonalMediaStore.init(this)
         CatalogAssets.init(this)
+        IgebaAccount.initialize(this)
         Log.i(TAG, "KTV application initialized without native services")
     }
 

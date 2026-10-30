@@ -32,8 +32,10 @@ object IgebaApiClient {
             connection.readTimeout = 40_000
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            IgebaAccount.attach(connection)
             connection.outputStream.use { it.write(body) }
             if (connection.responseCode !in 200..299) throw IOException("目录接口 HTTP ${connection.responseCode}")
+            IgebaAccount.receive(connection)
             val result = JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
             if (result.has("Result") && result.optInt("Result") < 0) {
                 throw IOException(result.optString("Description", "歌源拒绝请求"))
@@ -45,10 +47,10 @@ object IgebaApiClient {
     data class MediaAddress(val songNumber: String, val url: String, val voiceChannel: Int,
         val rightsCode: Int, val reason: String)
 
-    fun address(songNumber: String): MediaAddress {
+    fun address(songNumber: String, accountUserId: Long = IgebaAccount.session?.userId ?: IgebaApiClient.userId()): MediaAddress {
         require(songNumber.matches(Regex("\\d{1,16}"))) { "缺少有效的新歌源歌曲编号" }
         val result = post("GET_SONGADDR", JSONObject()
-            .put("UserId", userId()).put("SongNumber", songNumber), true)
+            .put("UserId", accountUserId).put("SongNumber", songNumber), true)
         val rights = result.optJSONObject("Rights") ?: throw IOException("歌源未返回权限状态")
         val code = rights.optInt("Code", Int.MIN_VALUE)
         if (code != 0 && code != 1) throw IOException(rights.optString("Reason", "歌源未提供播放权限"))

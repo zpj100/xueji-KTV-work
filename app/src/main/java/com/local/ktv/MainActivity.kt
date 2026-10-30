@@ -788,6 +788,7 @@ class MainActivity : AppCompatActivity() {
         }
         listOf(
             R.id.home_card_regular, R.id.home_card_favorite, R.id.home_card_category,
+            R.id.home_card_live,
             R.id.home_card_rank, R.id.home_card_song, R.id.home_card_singer, R.id.home_card_local,
         ).forEach { id ->
             findViewById<TextView?>(id)?.apply { textSize = 15f; setPadding(dp(8), dp(8), dp(8), dp(8)) }
@@ -6024,6 +6025,7 @@ class MainActivity : AppCompatActivity() {
     private var homeCardRegular: TextView? = null
     private var homeCardFavorite: TextView? = null
     private var homeCardCategory: TextView? = null
+    private var homeCardLive: TextView? = null
 
     /** 新歌榜海报分页  */
     private var textPosterPage: TextView? = null
@@ -6281,6 +6283,7 @@ class MainActivity : AppCompatActivity() {
         homeCardRegular = findViewById<TextView?>(R.id.home_card_regular)
         homeCardFavorite = findViewById<TextView?>(R.id.home_card_favorite)
         homeCardCategory = findViewById<TextView?>(R.id.home_card_category)
+        homeCardLive = findViewById<TextView?>(R.id.home_card_live)
         textPosterPage = findViewById<TextView?>(R.id.text_poster_page)
 
         // ===== 子页面外壳 =====
@@ -6318,6 +6321,7 @@ class MainActivity : AppCompatActivity() {
         if (homeCardRegular != null) homeCardRegular!!.setOnClickListener(View.OnClickListener { v: View? -> loadSangHistory() })
         if (homeCardFavorite != null) homeCardFavorite!!.setOnClickListener(View.OnClickListener { v: View? -> loadFavorites() })
         if (homeCardCategory != null) homeCardCategory!!.setOnClickListener(View.OnClickListener { v: View? -> loadCategoryPlaylists() })
+        if (homeCardLive != null) homeCardLive!!.setOnClickListener(View.OnClickListener { v: View? -> openLiveTv() })
         val homePoster = findViewById<View?>(R.id.home_poster_container)
         homePosterView = homePoster
         textPosterPage?.text = "1/${homeBanners.size}"
@@ -6426,7 +6430,7 @@ class MainActivity : AppCompatActivity() {
             btnTopSearch, btnTopOrder, btnTopVocal, btnTopNext, btnTopPause, btnTopReplay, btnTopTone,
             btnBottomGuess, btnBottomMobileOrder, btnBottomSettings, btnBottomExit, btnBack, btnPrevPage, btnNextPage,
             homeCardRank, homeCardSong, homeCardSinger, homeCardLocal, homeCardRegular,
-            homeCardFavorite, homeCardCategory,
+            homeCardFavorite, homeCardCategory, homeCardLive,
         ).forEach(::installPressFeedback)
         listOfNotNull(homePlayerHost, subPagePlayerHost, homePoster).forEach(TvFocusStyler::preserveBackground)
         (homePoster as? FrameLayout)?.foreground = getDrawable(R.drawable.bg_player_focus)
@@ -7177,7 +7181,7 @@ class MainActivity : AppCompatActivity() {
         homeCardSinger?.nextFocusDownId = R.id.home_card_local
         homeCardSinger?.nextFocusRightId = R.id.home_poster_container
         homeCardLocal?.nextFocusUpId = R.id.home_card_singer
-        homeCardLocal?.nextFocusLeftId = R.id.home_card_category
+        homeCardLocal?.nextFocusLeftId = R.id.home_card_live
         homeCardLocal?.nextFocusDownId = R.id.btn_bottom_settings
         homeCardLocal?.nextFocusRightId = R.id.home_poster_container
         homeCardRegular?.nextFocusUpId = R.id.home_player_container
@@ -7189,8 +7193,12 @@ class MainActivity : AppCompatActivity() {
         homeCardFavorite?.nextFocusDownId = R.id.btn_bottom_guess
         homeCardCategory?.nextFocusUpId = R.id.home_card_rank
         homeCardCategory?.nextFocusLeftId = R.id.home_card_favorite
-        homeCardCategory?.nextFocusRightId = R.id.home_card_local
+        homeCardCategory?.nextFocusRightId = R.id.home_card_live
         homeCardCategory?.nextFocusDownId = R.id.btn_bottom_settings
+        homeCardLive?.nextFocusUpId = R.id.home_card_rank
+        homeCardLive?.nextFocusLeftId = R.id.home_card_category
+        homeCardLive?.nextFocusRightId = R.id.home_card_local
+        homeCardLive?.nextFocusDownId = R.id.btn_bottom_settings
         homePosterView?.nextFocusUpId = R.id.btn_top_tone
         homePosterView?.nextFocusLeftId = R.id.home_card_song
         homePosterView?.nextFocusDownId = R.id.btn_bottom_exit
@@ -7967,6 +7975,12 @@ class MainActivity : AppCompatActivity() {
                 if (voiceEngineEnabled) "关闭" else "开启",
             ) { toggleVoiceEngine() },
             SettingsEntry(R.drawable.ott_ic_udisk_add_song, "网盘登录", cloudLoginSubtitle(), "登录") { cloudDiskBrowser.showHub() },
+            SettingsEntry(
+                R.drawable.ott_ic_about_us,
+                "i歌霸账号",
+                IgebaAccount.session?.let { "已登录：${it.nickname}" } ?: "登录或注册自己的账号",
+                "设置",
+            ) { IgebaAccountDialog.show(this) { showSettingsPage(false) } },
             SettingsEntry(R.drawable.ott_ic_scan, "扫描目录", extraScanSubtitle(), "管理") { showExtraScanDirsDialog() },
             SettingsEntry(
                 R.drawable.ott_ic_data_upgrade,
