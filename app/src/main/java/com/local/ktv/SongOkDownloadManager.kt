@@ -68,6 +68,7 @@ object SongOkDownloadManager {
     private val rangeIo = Executors.newFixedThreadPool(6)
     @Volatile private var resetting = false
     @Volatile internal var reclaimCache: ((SongStorage.Choice, Long) -> Unit)? = null
+    @Volatile internal var orderSnapshot: (() -> List<String>)? = null
 
     /** Cancel and drain writers before clearing local files; never delete USB files here. */
     fun resetLocalCache(clear: () -> Unit) {
@@ -402,6 +403,7 @@ object SongOkDownloadManager {
         val number=song.sourceSongNumber ?: throw IOException("该条目没有新歌源编号，无法下载")
         val attemptStopped = AtomicBoolean(false)
         synchronized(job) { job.inFlight.clear() }
+        val userId = IgebaApiClient.userId()
         var address=IgebaApiClient.address(number)
         val addressLock = Any()
         var addressRefreshes=0
@@ -422,6 +424,18 @@ object SongOkDownloadManager {
             if(error.code != 403 || !error.detail.contains("expired",true) || addressRefreshes >= 2) throw error
             if(job.cancelled.get()) throw IOException("下载已暂停")
             addressRefreshes++
+            if (addressRefreshes == 1) {
+                val snapshot = java.util.concurrent.FutureTask {
+                    orderSnapshot?.invoke().orEmpty()
+                        .filter { it.matches(Regex("\\d{1,16}")) }.toMutableList()
+                }
+                android.os.Handler(android.os.Looper.getMainLooper()).post(snapshot)
+                val orders = snapshot.get(5, java.util.concurrent.TimeUnit.SECONDS)
+                if (number !in orders) orders.add(number)
+                IgebaApiClient.post("NOTIFY_MYORDER", JSONObject()
+                    .put("UserId", userId).put("Action", 1)
+                    .put("SongNumbers", number).put("Orders", orders.joinToString(",")), true)
+            }
             android.util.Log.i("SongOkDownload", "过期地址刷新，歌曲=$number 次数=$addressRefreshes/2")
             address=IgebaApiClient.address(number)
         }
