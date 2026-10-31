@@ -62,7 +62,7 @@ class KtvStore {
 
     fun load() {
         runCatching {
-            val root = JSONObject(android.util.AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() })
+            val root = JSONObject(AtomicFileCompat.readText(file) ?: "{}")
             loopOne = root.optBoolean("loopOne", false)
             autoNext = root.optBoolean("autoNext", true)
             originalVocal = root.optBoolean("originalVocal", false)
@@ -191,15 +191,7 @@ class KtvStore {
             val json = JSONObject(snapshot)
             check(json.has("favoriteIds") && json.has("playlistSongs")) { "个人记录快照不完整" }
             file.parentFile?.mkdirs()
-            val atomic = android.util.AtomicFile(file)
-            val output = atomic.startWrite()
-            try {
-                output.write(snapshot.toByteArray(Charsets.UTF_8))
-                atomic.finishWrite(output)
-            } catch (error: Exception) {
-                atomic.failWrite(output)
-                throw error
-            }
+            AtomicFileCompat.writeText(file, snapshot)
         }.onFailure { android.util.Log.e("KtvStore", "个人记录保存失败", it) }
     }
 

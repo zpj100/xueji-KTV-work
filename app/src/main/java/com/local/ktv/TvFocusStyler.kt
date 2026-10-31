@@ -67,14 +67,14 @@ object TvFocusStyler {
                 setStroke((view.resources.displayMetrics.density + 0.5f).toInt(), Color.argb(150, 255, 255, 255))
             }
 
-        view.background = StateListDrawable().apply {
+        view.setBackgroundCompat(StateListDrawable().apply {
             // Focus must never retain the normal drawable. Platform Buttons and a
             // few legacy OTT assets use rectangular grey insets which remain visible
             // around a rounded overlay and make the focus target look oversized.
             addState(intArrayOf(android.R.attr.state_focused), focusFill())
             addState(intArrayOf(android.R.attr.state_pressed), focusFill())
             addState(intArrayOf(), normal)
-        }
+        })
     }
 
     fun installTree(view: View) {

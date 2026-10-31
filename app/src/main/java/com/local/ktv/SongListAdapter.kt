@@ -250,7 +250,7 @@ class SongListAdapter(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(4), 0, dp(4))
-            if (background == null) setBackgroundResource(R.drawable.ott_bg_item)
+            if (!hasBackgroundCompat()) setBackgroundResource(R.drawable.ott_bg_item)
             val info = songInfo(song, stacked = true)
             addView(info, LinearLayout.LayoutParams(0, dp(52), 1f))
             val views = addStateSlot(this, song, binding)

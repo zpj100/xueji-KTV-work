@@ -9,7 +9,6 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
-import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -18,13 +17,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.local.ktv.player.KtvPlaybackEngine
+import com.local.ktv.player.KtvVideoView
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -35,13 +29,12 @@ class LiveActivity : Activity() {
 
     private val channels = ArrayList<Channel>()
     private val tried = ArrayList<String>()
-    private var player: ExoPlayer? = null
-    private var surface: SurfaceView? = null
+    private var videoView: KtvVideoView? = null
+    private var engine: KtvPlaybackEngine? = null
     private var root: FrameLayout? = null
     private var mark: TextView? = null
     private var exitBtn: TextView? = null
 
-    // 选台：分类列(占满左侧) + 右侧电视台清单
     private var selectorRoot: LinearLayout? = null
     private var stationColumn: LinearLayout? = null
     private var stationInner: LinearLayout? = null
@@ -50,15 +43,12 @@ class LiveActivity : Activity() {
     private val stationIndex = ArrayList<Int>()
     private var activeCategory = ""
 
-    // 点按弹出的「上一个 / 下一个」按钮
     private var controls: LinearLayout? = null
 
     private var chIndex = 0
     private var sources = ArrayList<String>()
     private var srcIndex = 0
     private var failStreak = 0
-    private var videoW = 0
-    private var videoH = 0
     private val timeout = Runnable { autoSwitch("起播超时10s") }
 
     private val hideSelectorTask = Runnable { hideSelector() }
@@ -72,37 +62,27 @@ class LiveActivity : Activity() {
         val rootView = FrameLayout(this).also { it.setBackgroundColor(Color.BLACK) }
         root = rootView
 
-        val surfaceView = SurfaceView(this)
-        surfaceView.layoutParams = FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER,
-        )
-        surface = surfaceView
-        rootView.addView(surfaceView)
+        val video = KtvVideoView(this)
+        videoView = video
+        rootView.addView(video, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        // 点击捕获层：点击画面切换「上一个/下一个」控制条（或关闭选台）
         val clickCatcher = View(this).apply {
             isClickable = true
             setOnClickListener {
                 if (selectorRoot?.visibility == View.VISIBLE) hideSelector() else toggleControls()
             }
         }
-        rootView.addView(clickCatcher, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
-        ))
+        rootView.addView(clickCatcher, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        // 左上角台标（当前频道名）
         val markView = TextView(this).apply {
             setTextColor(Color.WHITE)
             textSize = 14f
             setShadowLayer(6f, 0f, 0f, Color.BLACK)
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { leftMargin = 28; topMargin = 24 }
+            layoutParams = FrameLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = 28; topMargin = 24 }
         }
         mark = markView
         rootView.addView(markView)
 
-        // 右上角透明「退出全屏」按钮
         val exitView = TextView(this).apply {
             text = "✕ 退出"
             setTextColor(Color.WHITE)
@@ -111,9 +91,7 @@ class LiveActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(24, 10, 24, 10)
             setOnClickListener { finish() }
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply {
+            layoutParams = FrameLayout.LayoutParams(WRAP, WRAP).apply {
                 topMargin = 24
                 marginEnd = 28
                 gravity = Gravity.TOP or Gravity.END
@@ -143,11 +121,11 @@ class LiveActivity : Activity() {
         buildSelector()
         buildControls()
         buildToggleButton()
-        buildPlayer()
+        buildPlayer(video)
         loadChannel(chIndex)
     }
 
-    // ===================== 选台：分类列 + 右弹台单 =====================
+    // ===================== 选台 =====================
 
     private fun orderedCategories(): List<String> {
         val order = listOf("央视", "卫视", "国际", "港澳台", "专题", "地方", "未分组")
@@ -169,25 +147,22 @@ class LiveActivity : Activity() {
             }
             visibility = View.GONE
         }
-
-        // 分类列（沾满左侧、整屏高）
         val catCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply { setColor(Color.parseColor("#E6000000")) }
+            setBackgroundCompat(GradientDrawable().apply { setColor(Color.parseColor("#E6000000")) })
             setPadding(dp(8), dp(22), dp(8), dp(22))
             layoutParams = LinearLayout.LayoutParams(dp(150), MATCH)
         }
         catCol.addView(sectionTitle("分类"))
         val catScroll = ScrollView(this)
         val catInner = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        catScroll.addView(catInner, ViewGroup.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT))
+        catScroll.addView(catInner, ViewGroup.LayoutParams(MATCH, WRAP))
         catCol.addView(catScroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
         rootSel.addView(catCol)
 
-        // 电视台清单列（点击分类后从右侧弹出）
         val stCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply { setColor(Color.parseColor("#CC000000")) }
+            setBackgroundCompat(GradientDrawable().apply { setColor(Color.parseColor("#CC000000")) })
             setPadding(dp(8), dp(22), dp(8), dp(22))
             layoutParams = LinearLayout.LayoutParams(dp(260), MATCH)
             visibility = View.GONE
@@ -195,7 +170,7 @@ class LiveActivity : Activity() {
         stCol.addView(sectionTitle("电视台"))
         val stScroll = ScrollView(this)
         val stInner = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        stScroll.addView(stInner, ViewGroup.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT))
+        stScroll.addView(stInner, ViewGroup.LayoutParams(MATCH, WRAP))
         stCol.addView(stScroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
         rootSel.addView(stCol)
 
@@ -203,7 +178,7 @@ class LiveActivity : Activity() {
         for (cat in orderedCategories()) {
             val item = makeItem(cat) { showCategory(cat) }
             item.setOnFocusChangeListener { v, hasFocus -> onItemFocus(v, hasFocus) }
-            catInner.addView(item, LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(2) })
+            catInner.addView(item, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(2) })
             categoryViews[cat] = item
         }
 
@@ -232,11 +207,7 @@ class LiveActivity : Activity() {
     }
 
     private fun onItemFocus(v: View, hasFocus: Boolean) {
-        if (hasFocus) {
-            v.setBackgroundColor(Color.parseColor("#66FFA500"))
-        } else {
-            v.setBackgroundColor(Color.TRANSPARENT)
-        }
+        v.setBackgroundColor(if (hasFocus) Color.parseColor("#66FFA500") else Color.TRANSPARENT)
         resetSelectorTimer()
     }
 
@@ -254,7 +225,6 @@ class LiveActivity : Activity() {
         }
     }
 
-    /** 点击分类：从右侧弹出该分类的电视台清单。 */
     private fun showCategory(cat: String) {
         activeCategory = cat
         val inner = stationInner ?: return
@@ -266,7 +236,7 @@ class LiveActivity : Activity() {
             if (ch.category.ifBlank { "未分组" } != cat) return@forEachIndexed
             val item = makeItem(ch.name) { selectChannel(idx) }
             item.setOnFocusChangeListener { v, hasFocus -> onItemFocus(v, hasFocus) }
-            inner.addView(item, LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(2) })
+            inner.addView(item, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(2) })
             stationItems.add(item)
             stationIndex.add(idx)
         }
@@ -308,7 +278,7 @@ class LiveActivity : Activity() {
         Toast.makeText(this, "已切到 ${channels[index].name}", Toast.LENGTH_SHORT).show()
     }
 
-    // ===================== 点按控制条：上一个 / 下一个（5s 隐藏） =====================
+    // ===================== 点按控制条 =====================
 
     private fun buildControls() {
         val host = root ?: return
@@ -334,29 +304,20 @@ class LiveActivity : Activity() {
         textSize = 16f
         gravity = Gravity.CENTER
         setPadding(dp(22), dp(10), dp(22), dp(10))
-        background = GradientDrawable().apply {
+        setBackgroundCompat(GradientDrawable().apply {
             setColor(Color.parseColor("#B3000000"))
             cornerRadius = dp(22).toFloat()
             setStroke(dp(1), Color.parseColor("#66FFFFFF"))
-        }
+        })
         isClickable = true
         setOnClickListener { onClick() }
     }
 
-    private fun showControls() {
-        controls?.visibility = View.VISIBLE
-        resetControlsTimer()
-    }
-
-    private fun hideControls() {
-        handler.removeCallbacks(hideControlsTask)
-        controls?.visibility = View.GONE
-    }
-
+    private fun showControls() { controls?.visibility = View.VISIBLE; resetControlsTimer() }
+    private fun hideControls() { handler.removeCallbacks(hideControlsTask); controls?.visibility = View.GONE }
     private fun toggleControls() {
         if (controls?.visibility == View.VISIBLE) hideControls() else showControls()
     }
-
     private fun resetControlsTimer() {
         handler.removeCallbacks(hideControlsTask)
         handler.postDelayed(hideControlsTask, 5_000)
@@ -369,11 +330,11 @@ class LiveActivity : Activity() {
             setTextColor(Color.WHITE)
             textSize = 15f
             setPadding(dp(16), dp(9), dp(16), dp(9))
-            background = GradientDrawable().apply {
+            setBackgroundCompat(GradientDrawable().apply {
                 setColor(Color.parseColor("#99000000"))
                 cornerRadius = dp(18).toFloat()
                 setStroke(dp(1), Color.parseColor("#66FFFFFF"))
-            }
+            })
             isFocusable = false
             isClickable = true
             setOnClickListener { toggleSelector() }
@@ -386,55 +347,20 @@ class LiveActivity : Activity() {
         host.addView(toggle)
     }
 
-    // ===================== 播放 =====================
+    // ===================== 播放（IJK） =====================
 
-    private fun buildPlayer() {
-        val factory = DefaultHttpDataSource.Factory()
-            .setUserAgent(UA)
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(10000)
-            .setReadTimeoutMs(15000)
-        val exo = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(factory))
-            .build()
-        player = exo
-        surface?.holder?.setKeepScreenOn(true)
-        exo.setVideoSurfaceView(surface)
-        exo.addListener(object : Player.Listener {
-            override fun onPlayerError(error: PlaybackException) {
-                autoSwitch(error.errorCodeName)
-            }
-
-            override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_READY) {
-                    failStreak = 0
-                    handler.removeCallbacks(timeout)
-                }
-            }
-
-            override fun onVideoSizeChanged(size: VideoSize) {
-                videoW = size.width
-                videoH = size.height
-                fitSurface()
-            }
-        })
-        root?.post { fitSurface() }
-    }
-
-    private fun fitSurface() {
-        val surfaceView = surface ?: return
-        val host = root ?: return
-        val rw = host.width
-        val rh = host.height
-        if (rw <= 0 || rh <= 0) return
-        if (videoW <= 0 || videoH <= 0) {
-            surfaceView.layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
-            return
+    private fun buildPlayer(view: KtvVideoView) {
+        val playback = KtvPlaybackEngine(this)
+        engine = playback
+        playback.attach(view)
+        playback.setOnPreparedListener {
+            failStreak = 0
+            handler.removeCallbacks(timeout)
         }
-        val scale = minOf(rw.toDouble() / videoW, rh.toDouble() / videoH)
-        surfaceView.layoutParams = FrameLayout.LayoutParams(
-            (videoW * scale).toInt(), (videoH * scale).toInt(), Gravity.CENTER,
-        )
+        playback.setOnErrorListener { _, what, extra ->
+            autoSwitch("what=$what extra=$extra")
+            true
+        }
     }
 
     private fun loadChannel(index: Int) {
@@ -451,16 +377,15 @@ class LiveActivity : Activity() {
     }
 
     private fun playSource(index: Int) {
-        val exo = player ?: return
+        val playback = engine ?: return
         if (sources.isEmpty() || index !in sources.indices) return
         srcIndex = index
         val url = sources[index]
         tried += url
         val name = channels[chIndex].name
         mark?.text = name + if (sources.size > 1) "  ·  ${srcIndex + 1}/${sources.size}" else ""
-        exo.setMediaItem(MediaItem.fromUri(Uri.parse(url)))
-        exo.prepare()
-        exo.playWhenReady = true
+        playback.setVideoUri(Uri.parse(url))
+        playback.start()
         handler.removeCallbacks(timeout)
         handler.postDelayed(timeout, 10000)
     }
@@ -514,30 +439,20 @@ class LiveActivity : Activity() {
                     }
                     return true
                 }
-                KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> {
-                    toggleSelector(); return true
-                }
+                KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> { toggleSelector(); return true }
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                    if (!selVisible) {
-                        toggleControls(); return true
-                    }
+                    if (!selVisible) { toggleControls(); return true }
                 }
                 KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_CHANNEL_DOWN,
                 KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (!selVisible) {
-                        switchChannel(1); return true
-                    }
+                    if (!selVisible) { switchChannel(1); return true }
                 }
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_CHANNEL_UP,
                 KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_DPAD_UP -> {
-                    if (!selVisible) {
-                        switchChannel(-1); return true
-                    }
+                    if (!selVisible) { switchChannel(-1); return true }
                 }
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                    if (!selVisible) {
-                        manualNextSource(); return true
-                    }
+                    if (!selVisible) { manualNextSource(); return true }
                 }
             }
         }
@@ -546,8 +461,8 @@ class LiveActivity : Activity() {
 
     override fun onStop() {
         handler.removeCallbacksAndMessages(null)
-        player?.release()
-        player = null
+        engine?.release()
+        engine = null
         super.onStop()
     }
 
@@ -591,7 +506,6 @@ class LiveActivity : Activity() {
     }
 
     companion object {
-        private const val UA = "Mozilla/5.0 (Linux; Android 4.4) XuejiKTV/2.1.7"
         private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 

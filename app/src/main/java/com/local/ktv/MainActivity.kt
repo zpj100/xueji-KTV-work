@@ -5553,10 +5553,10 @@ class MainActivity : AppCompatActivity() {
                 setImageResource(iconRes)
                 iconTint?.let { imageTintList = ColorStateList.valueOf(it) }
                 setPadding(dp(18), dp(18), dp(18), dp(18))
-                background = GradientDrawable().apply {
+                setBackgroundCompat(GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     setColor(Color.rgb(92, 92, 97))
-                }
+                })
             }, LinearLayout.LayoutParams(dp(76), dp(76)))
             addView(TextView(this@MainActivity).apply {
                 text = labelText; textSize = 17f; gravity = Gravity.CENTER; setTextColor(Color.WHITE)
@@ -5897,15 +5897,15 @@ class MainActivity : AppCompatActivity() {
         tile.setGravity(Gravity.CENTER)
         tile.setMinHeight(dp(110))
         // 默认背景:深色圆角 + 浅描边
-        tile.setBackground(roundedBg(PANEL, 8, DIVIDER, 1))
+        tile.setBackgroundCompat(roundedBg(PANEL, 8, DIVIDER, 1))
         tile.setOnClickListener(listener)
         tile.setOnFocusChangeListener(OnFocusChangeListener { v: View?, hasFocus: Boolean ->
             if (hasFocus) {
                 // 焦点态:青绿色圆角 + 白色描边
-                v!!.setBackground(roundedBg(FOCUS, 8, Color.argb(180, 255, 255, 255), 2))
+                v!!.setBackgroundCompat(roundedBg(FOCUS, 8, Color.argb(180, 255, 255, 255), 2))
                 tile.setTextColor(Color.rgb(8, 12, 18))
             } else {
-                v!!.setBackground(roundedBg(PANEL, 8, DIVIDER, 1))
+                v!!.setBackgroundCompat(roundedBg(PANEL, 8, DIVIDER, 1))
                 tile.setTextColor(TEXT_WHITE)
             }
         })
@@ -5927,7 +5927,7 @@ class MainActivity : AppCompatActivity() {
         layout.setOrientation(LinearLayout.VERTICAL)
         layout.setPadding(dp(12), dp(12), dp(12), dp(12))
         // 圆角面板背景
-        layout.setBackground(roundedBg(PANEL, 6, 0, 0))
+        layout.setBackgroundCompat(roundedBg(PANEL, 6, 0, 0))
         return layout
     }
 
@@ -6213,7 +6213,7 @@ class MainActivity : AppCompatActivity() {
                 gd.setColor(FOCUS)
                 gd.setCornerRadius(dp(6).toFloat())
                 gd.setStroke(dp(1), Color.argb(100, 255, 255, 255))
-                v!!.setBackground(gd)
+                v!!.setBackgroundCompat(gd)
                 view.setTextColor(Color.rgb(8, 12, 18))
             } else {
                 v!!.setBackgroundColor(Color.TRANSPARENT)
@@ -6440,10 +6440,13 @@ class MainActivity : AppCompatActivity() {
                 textSize = 34f
                 gravity = Gravity.CENTER
                 setTextColor(Color.WHITE)
-                background = GradientDrawable(
+                setBackgroundCompat(GradientDrawable(
                     GradientDrawable.Orientation.TL_BR,
                     intArrayOf(Color.rgb(254, 78, 184), Color.rgb(87, 52, 230))
-                ).apply { shape = GradientDrawable.OVAL; setStroke(dp(3), Color.argb(210, 255, 255, 255)) }
+                ).apply {
+                    shape = GradientDrawable.OVAL
+                    setStroke(dp(3), Color.argb(210, 255, 255, 255))
+                })
                 visibility = View.GONE
                 alpha = 0f
                 elevation = dp(9).toFloat()
@@ -6789,10 +6792,10 @@ class MainActivity : AppCompatActivity() {
             "原唱" -> "♟\n原唱"
             else -> "♛\n伴唱"
         }
-        notice.background = GradientDrawable(
+        notice.setBackgroundCompat(GradientDrawable(
             GradientDrawable.Orientation.TL_BR,
             intArrayOf(Color.rgb(151, 126, 255), Color.rgb(74, 39, 220))
-        ).apply { shape = GradientDrawable.OVAL }
+        ).apply { shape = GradientDrawable.OVAL })
         updatePlaybackNoticeBounds()
         notice.visibility = View.VISIBLE
         notice.alpha = 0f
@@ -6811,10 +6814,10 @@ class MainActivity : AppCompatActivity() {
         val notice = songIntroNotice ?: return
         main.removeCallbacks(hideSongIntroNotice)
         notice.text = "${song.title}\n${song.singer.orEmpty()}"
-        notice.background = GradientDrawable(
+        notice.setBackgroundCompat(GradientDrawable(
             GradientDrawable.Orientation.LEFT_RIGHT,
             intArrayOf(Color.rgb(163, 67, 225), Color.rgb(242, 48, 174), Color.argb(20, 242, 48, 174))
-        ).apply { cornerRadius = dp(3).toFloat() }
+        ).apply { cornerRadius = dp(3).toFloat() })
         updatePlaybackNoticeBounds()
         notice.visibility = View.VISIBLE
         songIntroIcon?.visibility = View.VISIBLE
@@ -7327,11 +7330,11 @@ class MainActivity : AppCompatActivity() {
             cornerRadius = dp(4).toFloat()
             setStroke(dp(1), Color.argb(150, 255, 255, 255))
         }
-        tab.background = StateListDrawable().apply {
+        tab.setBackgroundCompat(StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_focused), focused)
             addState(intArrayOf(android.R.attr.state_pressed), focused)
             addState(intArrayOf(), normal)
-        }
+        })
     }
 
     /**
@@ -8172,6 +8175,10 @@ class MainActivity : AppCompatActivity() {
     private fun networkStatusText(): String = if (isNetworkConnected()) "已连接" else "未连接"
 
     private fun chooseUsbFolder(saveDownloads: Boolean, rootPath: String? = null) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.LOLLIPOP) {
+            toast("Android 5.0 以下不支持U盘目录选择，请使用本地存储")
+            return
+        }
         val previousPaths = library.allSongs().mapNotNull { it.path }.toSet()
         busy(true, "正在检测U盘 / 内存卡...")
         io.execute {
@@ -8499,10 +8506,10 @@ class MainActivity : AppCompatActivity() {
                     isClickable = true
                     isFocusable = true
                     visibility = View.GONE
-                    background = GradientDrawable().apply {
+                    setBackgroundCompat(GradientDrawable().apply {
                         cornerRadius = dp(12).toFloat()
                         setColor(Color.rgb(255, 204, 92))
-                    }
+                    })
                 }
                 addView(databaseRetryButton, LinearLayout.LayoutParams(dp(180), dp(54)).apply {
                     gravity = Gravity.CENTER_HORIZONTAL
@@ -10326,6 +10333,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 把系统返回的 tree Uri 还原为可直接扫描的文件路径（支持内部存储与常见挂载卷）。 */
     private fun treeUriToPath(uri: Uri): String? {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.KITKAT) return null
         val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
         if (docId.startsWith("primary:")) {
             return Environment.getExternalStorageDirectory().absolutePath +

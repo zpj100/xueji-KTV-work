@@ -14,6 +14,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.local.ktv.Song
 import com.local.ktv.TvFocusStyler
+import com.local.ktv.setBackgroundCompat
 
 class PlayerControllerView @JvmOverloads constructor(
     context: Context,
@@ -145,11 +146,11 @@ class PlayerControllerView @JvmOverloads constructor(
             gravity = Gravity.CENTER
             isFocusable = true
             isClickable = true
-            background = GradientDrawable().apply {
+            setBackgroundCompat(GradientDrawable().apply {
                 setColor(Color.argb(150, 22, 31, 42))
                 cornerRadius = dp(6).toFloat()
                 setStroke(dp(1), Color.argb(80, 241, 241, 241))
-            }
+            })
             setOnClickListener {
                 action()
                 resetAutoHide()

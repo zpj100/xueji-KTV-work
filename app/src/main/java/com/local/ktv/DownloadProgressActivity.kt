@@ -40,11 +40,11 @@ class DownloadProgressActivity : Activity() {
 
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
+            setBackgroundCompat(GradientDrawable().apply {
                 setColor(Color.parseColor("#80000000")) // 50% 不透明度
                 cornerRadius = dp(18).toFloat()
                 setStroke(dp(1), Color.parseColor("#33FFFFFF"))
-            }
+            })
             setPadding(dp(20), dp(14), dp(20), dp(18))
         }
 
@@ -67,10 +67,10 @@ class DownloadProgressActivity : Activity() {
             isFocusable = true
             isClickable = true
             setOnClickListener { finish() }
-            background = GradientDrawable().apply {
+            setBackgroundCompat(GradientDrawable().apply {
                 setColor(Color.parseColor("#33FFFFFF"))
                 cornerRadius = dp(14).toFloat()
-            }
+            })
         })
         panel.addView(titleRow)
 

@@ -2,6 +2,7 @@ package com.local.ktv
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.system.Os
@@ -24,9 +25,7 @@ internal object SongStorage {
     private const val USB_CACHE = "MaidongKTV-downloads"
     private const val EXTERNAL_PROVIDER = "com.android.externalstorage.documents"
     private val columns = arrayOf(
-        DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-        DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-        DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_FLAGS,
+        "document_id", "display_name", "_size", "last_modified", "mime_type", "flags",
     )
 
     fun configure(usb: Boolean, tree: String, reserveGb: Double, showUsbSongs: Boolean = true,
@@ -242,11 +241,10 @@ internal object SongStorage {
         val existing = generateSequence(root) { it.parentFile }.firstOrNull { it.exists() }
             ?: error("保存位置不可用")
         if (choice.usb && (existing != root || !root.isDirectory)) return documentCapacity(choice)
-        val stats = Os.statvfs(existing.absolutePath)
-        val unit = stats.f_frsize
-        check(unit > 0 && stats.f_blocks <= Long.MAX_VALUE / unit &&
-            stats.f_bavail <= Long.MAX_VALUE / unit) { "保存位置容量无效" }
-        return Capacity(stats.f_bavail * unit, stats.f_blocks * unit)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            return Capacity(existing.usableSpace.coerceAtLeast(0), existing.totalSpace.coerceAtLeast(0))
+        }
+        return StorageStats.path(existing.absolutePath)
     }
 
     private fun documentCapacity(choice: Choice): Capacity {
@@ -259,11 +257,16 @@ internal object SongStorage {
         }
     }
 
-    private fun descriptorCapacity(stats: android.system.StructStatVfs): Capacity {
-        val unit = stats.f_frsize
-        check(unit > 0 && stats.f_blocks > 0 && stats.f_blocks <= Long.MAX_VALUE / unit &&
-            stats.f_bavail >= 0 && stats.f_bavail <= Long.MAX_VALUE / unit) { "U盘容量信息无效" }
-        return Capacity(stats.f_bavail * unit, stats.f_blocks * unit)
+    /** 仅在 Android 5.0+ 加载，避免 4.x 解析 android.system.Os。 */
+    private object StorageStats {
+        private fun of(stats: android.system.StructStatVfs): Capacity {
+            val unit = stats.f_frsize
+            check(unit > 0 && stats.f_blocks > 0 && stats.f_blocks <= Long.MAX_VALUE / unit &&
+                stats.f_bavail >= 0 && stats.f_bavail <= Long.MAX_VALUE / unit) { "U盘容量信息无效" }
+            return Capacity(stats.f_bavail * unit, stats.f_blocks * unit)
+        }
+        fun path(path: String): Capacity = of(Os.statvfs(path))
+        fun fd(fd: java.io.FileDescriptor): Capacity = of(Os.fstatvfs(fd))
     }
 
     fun volumeKey(choice: Choice): String = if (choice.usb) {
@@ -338,7 +341,7 @@ internal object SongStorage {
             check(file.parentFile?.let { it.exists() || it.mkdirs() } == true) { "无法创建歌曲目录" }
             val handle = RandomAccessFile(file, "rw")
             return Output(handle.channel, handle) {
-                descriptorCapacity(Os.fstatvfs(handle.fd))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) StorageStats.fd(handle.fd) else Capacity(file.usableSpace.coerceAtLeast(0), file.totalSpace.coerceAtLeast(0))
             }
         }
         override fun delete(): Boolean = !file.exists() || file.delete()
@@ -375,7 +378,7 @@ internal object SongStorage {
                 stream.channel.position(0) // Reject a pipe-backed provider: resume must be seekable.
                 val fd = descriptor.fileDescriptor
                 return Output(stream.channel, stream) {
-                    descriptorCapacity(Os.fstatvfs(fd))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) StorageStats.fd(fd) else Capacity(0, 0)
                 }
             } catch (error: Throwable) {
                 stream.close()

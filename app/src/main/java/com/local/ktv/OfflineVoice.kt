@@ -49,6 +49,10 @@ class OfflineVoice(context: Context) {
     }
 
     fun prepare(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            Log.w(TAG, "Android 5.0 以下不支持离线语音，已跳过")
+            return false
+        }
         if (model != null) return true
         return try {
             LibVosk.setLogLevel(LogLevel.WARNINGS)
