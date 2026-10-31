@@ -342,8 +342,14 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzemaxduration", 100L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 1_048_576L)
         val useMediaCodec = decoderMode == PlaybackDecoderMode.SYSTEM
-        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", if (useMediaCodec) 1L else 0L)
+        // 音频硬解回退：本版 FFmpeg 只编了 AAC/MP3 软解器，缺 Vorbis/FLAC/AC3/Opus；
+        // 开启 MediaCodec 让系统硬解 MKV 的 Vorbis 等音轨，视频仍走 FFmpeg 软解以保持 4.4 稳定。
+        val audioMediaCodec = true
+        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", if (useMediaCodec || audioMediaCodec) 1L else 0L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-all-videos", if (useMediaCodec) 1L else 0L)
+        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-avc", if (useMediaCodec) 1L else 0L)
+        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-hevc", if (useMediaCodec) 1L else 0L)
+        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-mpeg4", if (useMediaCodec) 1L else 0L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-auto-rotate", 0L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-handle-resolution-change", 0L)
         if (audioOnly) player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "vn", 1L)
