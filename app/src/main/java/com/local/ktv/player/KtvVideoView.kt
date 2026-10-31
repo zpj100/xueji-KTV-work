@@ -204,6 +204,8 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         prepared = false
         startWhenPrepared = false
         hasRenderedFirstFrame = false
+        // 新媒体默认恢复满音量，避免上一首静音/练唱状态残留导致无声。
+        runCatching { ijkPlayer?.setVolume(1f, 1f) }
         val player = ensureIjkPlayer()
         if (player == null) {
             errorListener?.onError(null, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0)
@@ -330,7 +332,9 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-type", 0L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 0L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "opensles", 0L)
-        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "soundtouch", 1L)
+        // 调音走 FFmpeg 的 FFP_PROP_FLOAT_PLAYBACK_PITCH，不依赖 soundtouch；
+        // 开启 soundtouch 在部分 4.4 盒子会因缺 avfilter 导致音频无声。
+        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "soundtouch", 0L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "overlay-format", IjkMediaPlayer.SDL_FCC_RV16.toLong())
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 1L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size", 6_291_456L)
@@ -351,6 +355,16 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
             videoWidth = mp.videoWidth
             videoHeight = mp.videoHeight
             targetView?.updateVideoSize(videoWidth, videoHeight)
+            // 多音轨 MKV（原唱/伴唱双 Vorbis）：默认锁定第一条音轨，避免 IJK 未选轨导致无声。
+            runCatching {
+                val audio = ijkPlayer?.trackInfo?.indices?.filter {
+                    ijkPlayer!!.trackInfo[it].trackType == ITrackInfo.MEDIA_TRACK_TYPE_AUDIO
+                }
+                if (audio != null && audio.isNotEmpty() &&
+                    ijkPlayer?.getSelectedTrack(ITrackInfo.MEDIA_TRACK_TYPE_AUDIO) != audio.first()) {
+                    ijkPlayer?.selectTrack(audio.first())
+                }
+            }
             preparedListener?.onPrepared(null)
             if (startWhenPrepared && !mp.isPlaying) runCatching { mp.start() }
         }
