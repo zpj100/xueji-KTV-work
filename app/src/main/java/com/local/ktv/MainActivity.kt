@@ -5270,6 +5270,13 @@ class MainActivity : AppCompatActivity() {
      */
     private fun prepareEmbeddedDualTrackVocal(song: Song?, positionMs: Int): Boolean {
         val videoPlayer = player ?: return false
+        // 系统 MediaPlayer 在 Android 4.x 只有一个视频硬解码器，无法同时开两个实例
+        // （第二个实例起不来会导致另一条音轨无声）。改用单引擎 selectTrack 切轨
+        // （与参考项目 KTVPlayer 一致）；双引擎无缝切换仅 IJK 路径使用。
+        if (videoPlayer.isSystemPlayer) {
+            if (embeddedDualTrackMode) releaseVocalPlayer()
+            return false
+        }
         val path = song?.path?.takeIf { it.isNotBlank() } ?: return false
         if (videoPlayer.audioTrackCount() < 2 || song?.hasLocalFile() != true) {
             if (embeddedDualTrackMode) releaseVocalPlayer()

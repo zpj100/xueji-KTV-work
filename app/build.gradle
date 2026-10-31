@@ -16,8 +16,8 @@ android {
         applicationId "com.local.ktv"
         minSdk 14
         targetSdk 25
-        versionCode 20
-        versionName "2.3.0"
+        versionCode 21
+        versionName "2.3.1"
 
     }
 

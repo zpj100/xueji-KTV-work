@@ -60,6 +60,8 @@ class KtvVideoView @JvmOverloads constructor(
     fun selectAudioTrack(original: Boolean): Boolean = engine?.selectAudioTrack(original) == true
     fun audioTrackCount(): Int = engine?.audioTrackCount() ?: 0
     fun selectAudioChannel(channel: Int, volume: Float) = engine?.selectAudioChannel(channel, volume) ?: Unit
+    /** 当前是否由系统 MediaPlayer 承担播放（本地文件）。 */
+    val isSystemPlayer: Boolean get() = engine?.isUsingSystemPlayer == true
     val isPlaying: Boolean get() = engine?.isPlaying == true
     val currentPosition: Int get() = engine?.currentPosition ?: 0
     val duration: Int get() = engine?.duration ?: 0
@@ -163,6 +165,9 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
     internal val decodedNonSilentSamples: Long get() = 0L
 
     fun isSoftwareDecoderAvailable(): Boolean = true
+
+    /** 系统 MediaPlayer 是否在用（4.4 上只有单个视频解码器，不能开双引擎）。 */
+    val isUsingSystemPlayer: Boolean get() = useSystemPlayer
 
     val isPlaying: Boolean get() = runCatching {
         if (useSystemPlayer) sysPlayer?.isPlaying == true else ijkPlayer?.isPlaying == true
@@ -380,7 +385,15 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
                     infos[it].trackType == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO
                 }
                 if (audio.size < 2) return@runCatching false
-                mp.selectTrack(if (original) audio[0] else audio[1])
+                // Android 4.4 播放中直接 selectTrack 常不生效：先暂停再切轨，切完恢复位置与播放。
+                val wasPlaying = runCatching { mp.isPlaying }.getOrDefault(false)
+                val pos = runCatching { mp.currentPosition }.getOrDefault(0)
+                if (wasPlaying) runCatching { mp.pause() }
+                val target = if (original) audio[0] else audio[1]
+                mp.selectTrack(target)
+                if (pos > 0) runCatching { mp.seekTo(pos) }
+                if (wasPlaying) runCatching { mp.start() }
+                Log.i(TAG, "system selectTrack original=$original target=$target audio=$audio")
                 true
             }.getOrDefault(false)
         }
