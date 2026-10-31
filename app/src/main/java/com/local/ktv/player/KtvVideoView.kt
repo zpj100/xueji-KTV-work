@@ -127,10 +127,18 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         const val TAG = "KtvPlaybackEngine"
         const val FFP_PROP_FLOAT_PLAYBACK_PITCH = 10008
         const val MEDIA_INFO_VIDEO_RENDERING_START = 3
+        val LOCAL_MEDIA_EXT = listOf(
+            ".mkv", ".mp4", ".mp3", ".avi", ".mov", ".ts", ".flv", ".wav", ".m4a", ".aac", ".flac",
+        )
     }
 
     private val appContext = context.applicationContext
     private var ijkPlayer: IjkMediaPlayer? = null
+    /** Android 4.x 系统 MediaPlayer：本地文件（含 MKV/Vorbis）优先走它，4.4 原生支持。 */
+    private var sysPlayer: MediaPlayer? = null
+    private var useSystemPlayer = false
+    /** 网络流（直播/HLS/RTMP）需要不同的探测与 HTTP 参数。 */
+    private var isLiveStream = false
     private var targetView: KtvVideoView? = null
     private var prepared = false
     private var released = false
@@ -156,12 +164,16 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
 
     fun isSoftwareDecoderAvailable(): Boolean = true
 
-    val isPlaying: Boolean get() = runCatching { ijkPlayer?.isPlaying == true }.getOrDefault(false)
+    val isPlaying: Boolean get() = runCatching {
+        if (useSystemPlayer) sysPlayer?.isPlaying == true else ijkPlayer?.isPlaying == true
+    }.getOrDefault(false)
     val currentPosition: Int get() = runCatching {
-        (ijkPlayer?.currentPosition ?: 0L).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+        val ms: Long = if (useSystemPlayer) (sysPlayer?.currentPosition ?: 0).toLong() else (ijkPlayer?.currentPosition ?: 0L)
+        ms.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
     }.getOrDefault(0)
     val duration: Int get() = runCatching {
-        (ijkPlayer?.duration ?: 0L).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+        val ms: Long = if (useSystemPlayer) (sysPlayer?.duration ?: 0).toLong() else (ijkPlayer?.duration ?: 0L)
+        ms.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
     }.getOrDefault(0)
 
     fun setOnPreparedListener(listener: MediaPlayer.OnPreparedListener?) { preparedListener = listener }
@@ -188,11 +200,15 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         view.updateVideoSize(videoWidth, videoHeight)
         view.installSurfaceCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                if (targetView === view && !released) setOutputHolder(holder)
+                if (targetView !== view || released) return
+                if (useSystemPlayer) runCatching { sysPlayer?.setDisplay(holder) } else setOutputHolder(holder)
             }
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
             override fun surfaceDestroyed(holder: SurfaceHolder) {
-                if (targetView === view) runCatching { ijkPlayer?.setDisplay(null) }
+                if (targetView === view) {
+                    runCatching { ijkPlayer?.setDisplay(null) }
+                    runCatching { sysPlayer?.setDisplay(null) }
+                }
             }
         })
         view.currentHolder().takeIf { it.surface?.isValid == true }?.let(::setOutputHolder)
@@ -206,6 +222,12 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         hasRenderedFirstFrame = false
         // 新媒体默认恢复满音量，避免上一首静音/练唱状态残留导致无声。
         runCatching { ijkPlayer?.setVolume(1f, 1f) }
+        releaseSystemPlayer()
+        // 本地媒体文件优先走系统 MediaPlayer：Android 4.4 原生支持 MKV(Vorbis)/MP4/MP3，
+        // 而精简版 IJK 的 FFmpeg 缺 Vorbis 等解码器；直播/网络流仍走 IJK（支持 RTMP/HLS）。
+        isLiveStream = !isLocalMedia(uri)
+        if (!isLiveStream && prepareSystem(uri)) return
+        useSystemPlayer = false
         val player = ensureIjkPlayer()
         if (player == null) {
             errorListener?.onError(null, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0)
@@ -224,6 +246,73 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         }
     }
 
+    /** 本地媒体文件扩展名（系统 MediaPlayer 在 4.4 上原生支持这些容器）。 */
+    private fun isLocalMedia(uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase()
+        // content:// 无法从 URI 判断扩展名，交给系统 MediaPlayer（它能按 MIME 解析）。
+        if (scheme == "content") return true
+        if (scheme != null && scheme != "file") return false
+        val path = if (scheme == "file") uri.path.orEmpty() else uri.toString()
+        val lower = path.lowercase()
+        return LOCAL_MEDIA_EXT.any { lower.endsWith(it) }
+    }
+
+    /** 用系统 MediaPlayer 准备本地媒体，成功返回 true。 */
+    private fun prepareSystem(uri: Uri): Boolean = runCatching {
+        val player = MediaPlayer()
+        sysPlayer = player
+        useSystemPlayer = true
+        player.setAudioStreamType(AudioManager.STREAM_MUSIC)
+        player.setScreenOnWhilePlaying(true)
+        player.setOnPreparedListener { mp ->
+            prepared = true
+            videoWidth = mp.videoWidth
+            videoHeight = mp.videoHeight
+            targetView?.updateVideoSize(videoWidth, videoHeight)
+            preparedListener?.onPrepared(null)
+            if (startWhenPrepared && !mp.isPlaying) runCatching { mp.start() }
+        }
+        player.setOnCompletionListener { completionListener?.onCompletion(null) }
+        player.setOnErrorListener { _, what, extra ->
+            Log.e(TAG, "system player error what=$what extra=$extra; fallback IJK")
+            fallbackToIjk()
+            true
+        }
+        val holder = targetView?.currentHolder()
+        if (holder?.surface?.isValid == true) player.setDisplay(holder)
+        if (uri.scheme.equals("content", true)) {
+            player.setDataSource(appContext, uri)
+        } else {
+            val path = if (uri.scheme.equals("file", true)) uri.path.orEmpty() else uri.toString()
+            player.setDataSource(path)
+        }
+        player.prepareAsync()
+        true
+    }.getOrElse {
+        Log.e(TAG, "system prepare failed; fallback IJK", it)
+        releaseSystemPlayer()
+        false
+    }
+
+    /** 系统播放器失败时降级到 IJK。 */
+    private fun fallbackToIjk() {
+        val uri = lastUri ?: return
+        releaseSystemPlayer()
+        useSystemPlayer = false
+        prepared = false
+        val player = ensureIjkPlayer() ?: return
+        runCatching { prepare(player, uri) }
+    }
+
+    private fun releaseSystemPlayer() {
+        val player = sysPlayer ?: run { useSystemPlayer = false; return }
+        sysPlayer = null
+        useSystemPlayer = false
+        runCatching { player.setDisplay(null) }
+        runCatching { player.reset() }
+        runCatching { player.release() }
+    }
+
     private fun prepare(player: IjkMediaPlayer, uri: Uri) {
         player.reset()
         configure(player)
@@ -235,32 +324,40 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
 
     fun start() {
         if (!prepared) { startWhenPrepared = true; return }
-        runCatching { ijkPlayer?.start() }
+        if (useSystemPlayer) runCatching { sysPlayer?.start() } else runCatching { ijkPlayer?.start() }
     }
 
     fun pause() {
         startWhenPrepared = false
-        runCatching { if (ijkPlayer?.isPlaying == true) ijkPlayer?.pause() }
+        if (useSystemPlayer) {
+            runCatching { if (sysPlayer?.isPlaying == true) sysPlayer?.pause() }
+        } else {
+            runCatching { if (ijkPlayer?.isPlaying == true) ijkPlayer?.pause() }
+        }
     }
 
-    fun seekTo(positionMs: Int) = runCatching { ijkPlayer?.seekTo(positionMs.coerceAtLeast(0).toLong()) }
+    fun seekTo(positionMs: Int) = runCatching {
+        val ms = positionMs.coerceAtLeast(0)
+        if (useSystemPlayer) sysPlayer?.seekTo(ms) else ijkPlayer?.seekTo(ms.toLong())
+    }
 
     fun stop() {
         startWhenPrepared = false
         prepared = false
-        runCatching { ijkPlayer?.stop() }
+        if (useSystemPlayer) runCatching { sysPlayer?.stop() } else runCatching { ijkPlayer?.stop() }
     }
 
     fun setVolume(left: Float, right: Float) {
         val l = left.coerceIn(0f, 1f)
         val r = right.coerceIn(0f, 1f)
-        runCatching { ijkPlayer?.setVolume(l, r) }
+        if (useSystemPlayer) runCatching { sysPlayer?.setVolume(l, r) } else runCatching { ijkPlayer?.setVolume(l, r) }
     }
 
     /** -5..5 步进，每步 8% 音调（与原 32 位后端一致）。 */
     fun setTone(step: Int) {
         toneStep = step.coerceIn(-5, 5)
-        ijkPlayer?.let(::applyTone)
+        // 系统 MediaPlayer 不支持变调，仅记录步进；IJK 路径生效。
+        if (!useSystemPlayer) ijkPlayer?.let(::applyTone)
     }
 
     private fun applyTone(player: IjkMediaPlayer) {
@@ -274,23 +371,53 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         }.onFailure { Log.e(TAG, "applyTone step=$toneStep failed", it) }
     }
 
-    fun selectAudioTrack(original: Boolean): Boolean = runCatching {
-        val ijk = ijkPlayer ?: return@runCatching false
-        val audioTracks = ijk.trackInfo.indices.filter {
-            ijk.trackInfo[it].trackType == ITrackInfo.MEDIA_TRACK_TYPE_AUDIO
+    fun selectAudioTrack(original: Boolean): Boolean {
+        if (useSystemPlayer) {
+            val mp = sysPlayer ?: return false
+            return runCatching {
+                val infos = mp.trackInfo ?: return@runCatching false
+                val audio = infos.indices.filter {
+                    infos[it].trackType == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO
+                }
+                if (audio.size < 2) return@runCatching false
+                mp.selectTrack(if (original) audio[0] else audio[1])
+                true
+            }.getOrDefault(false)
         }
-        if (audioTracks.size < 2) return@runCatching false
-        val target = if (original) audioTracks[0] else audioTracks[1]
-        if (ijk.getSelectedTrack(ITrackInfo.MEDIA_TRACK_TYPE_AUDIO) != target) ijk.selectTrack(target)
-        true
-    }.getOrDefault(false)
+        return runCatching {
+            val ijk = ijkPlayer ?: return@runCatching false
+            val audioTracks = ijk.trackInfo.indices.filter {
+                ijk.trackInfo[it].trackType == ITrackInfo.MEDIA_TRACK_TYPE_AUDIO
+            }
+            if (audioTracks.size < 2) return@runCatching false
+            val target = if (original) audioTracks[0] else audioTracks[1]
+            if (ijk.getSelectedTrack(ITrackInfo.MEDIA_TRACK_TYPE_AUDIO) != target) ijk.selectTrack(target)
+            true
+        }.getOrDefault(false)
+    }
 
-    fun audioTrackCount(): Int = runCatching {
-        ijkPlayer?.trackInfo?.count { it.trackType == ITrackInfo.MEDIA_TRACK_TYPE_AUDIO } ?: 0
-    }.getOrDefault(0)
+    fun audioTrackCount(): Int {
+        if (useSystemPlayer) {
+            val mp = sysPlayer ?: return 0
+            return runCatching {
+                mp.trackInfo?.count { it.trackType == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO } ?: 0
+            }.getOrDefault(0)
+        }
+        return runCatching {
+            ijkPlayer?.trackInfo?.count { it.trackType == ITrackInfo.MEDIA_TRACK_TYPE_AUDIO } ?: 0
+        }.getOrDefault(0)
+    }
 
     fun selectAudioChannel(channel: Int, volume: Float) {
         val v = volume.coerceIn(0f, 1f)
+        if (useSystemPlayer) {
+            when (channel) {
+                AudioChannels.AUDIO_CHANNEL_LEFT -> setVolume(v, 0f)
+                AudioChannels.AUDIO_CHANNEL_RIGHT -> setVolume(0f, v)
+                else -> setVolume(v, v)
+            }
+            return
+        }
         val ijk = ijkPlayer
         if (ijk != null) {
             runCatching {
@@ -311,6 +438,7 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         released = true
         startWhenPrepared = false
         prepared = false
+        releaseSystemPlayer()
         releaseIjk()
         targetView = null
         preparedListener = null
@@ -329,8 +457,9 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
     private fun configure(player: IjkMediaPlayer) {
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared", 0L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "skip_loop_filter", 48L)
-        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-type", 0L)
-        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 0L)
+        // 直播用视频主时钟并允许丢帧，避免纯视频流/弱网下卡死；点播用音频主时钟保证音画同步。
+        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-type", if (isLiveStream) 1L else 0L)
+        player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", if (isLiveStream) 1L else 0L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "opensles", 0L)
         // 调音走 FFmpeg 的 FFP_PROP_FLOAT_PLAYBACK_PITCH，不依赖 soundtouch；
         // 开启 soundtouch 在部分 4.4 盒子会因缺 avfilter 导致音频无声。
@@ -338,9 +467,20 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "overlay-format", IjkMediaPlayer.SDL_FCC_RV16.toLong())
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 1L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size", 6_291_456L)
-        player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0L)
-        player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzemaxduration", 100L)
-        player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 1_048_576L)
+        if (isLiveStream) {
+            // 直播/HLS：给足探测时间、允许 Range（m3u8 分片必需）、断线自动重连。
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 1L)
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzemaxduration", 5_000L)
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", 5_000_000L)
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 3_145_728L)
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1L)
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 15_000_000L)
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 1L)
+        } else {
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0L)
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzemaxduration", 100L)
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 1_048_576L)
+        }
         val useMediaCodec = decoderMode == PlaybackDecoderMode.SYSTEM
         // 音频硬解回退：本版 FFmpeg 只编了 AAC/MP3 软解器，缺 Vorbis/FLAC/AC3/Opus；
         // 开启 MediaCodec 让系统硬解 MKV 的 Vorbis 等音轨，视频仍走 FFmpeg 软解以保持 4.4 稳定。
