@@ -609,6 +609,74 @@ class MainActivity : AppCompatActivity() {
         main.post { showDatabaseLoading(true, "$phase ${value}%", value) }
     }
 
+    // ===== 一键批量缓存（对照本地曲库，只下本地没有的；不限大小） =====
+    private var cacheQueue: java.util.ArrayDeque<Song>? = null
+    private val cachePump = object : Runnable {
+        override fun run() {
+            val q = cacheQueue ?: return
+            while (q.isNotEmpty() && SongOkDownloadManager.activeDownloads().size < 3) {
+                val song = q.removeFirst()
+                if (!SongOkDownloadManager.isDownloaded(song) && !SongOkDownloadManager.isDownloading(song)) {
+                    SongOkDownloadManager.download(song, null)
+                }
+            }
+            if (q.isNotEmpty()) main.postDelayed(this, 1200) else {
+                cacheQueue = null
+                toast("批量缓存已全部加入队列")
+            }
+        }
+    }
+
+    /** 分页读取整库（muse 数据库）全部歌曲。 */
+    private fun allCatalogSongs(): List<Song> {
+        val total = runCatching { library.muse.songCount() }.getOrDefault(0)
+        val out = ArrayList<Song>(if (total > 0) total else 0)
+        val page = 1000
+        var offset = 0
+        while (true) {
+            val chunk = runCatching { library.muse.hdSongs(offset, page) }.getOrNull() ?: break
+            if (chunk.isEmpty()) break
+            out += chunk
+            offset += chunk.size
+            if (chunk.size < page) break
+            if (total > 0 && offset >= total) break
+        }
+        return out
+    }
+
+    /** 统计整库中本地没有的曲目并确认后批量缓存。 */
+    private fun confirmCacheMissing() {
+        if (databaseBootstrapRunning) { toast("曲库正在处理，请稍后重试"); return }
+        busy(true, "正在统计本地缺失曲目…")
+        io.execute {
+            val all = allCatalogSongs().filter { !it.sourceSongNumber.isNullOrBlank() }
+            val missing = all.filter { !SongOkDownloadManager.isDownloaded(it) && !SongOkDownloadManager.isDownloading(it) }
+            main.post {
+                busy(false, "")
+                if (missing.isEmpty()) { toast("本地曲库已包含全部可缓存曲目"); return@post }
+                AlertDialog.Builder(this)
+                    .setTitle("一键缓存缺失曲目")
+                    .setMessage("可缓存曲目 ${all.size} 首，本地已有 ${all.size - missing.size} 首。\n将缓存缺失的 ${missing.size} 首到本地（不限大小）。")
+                    .setPositiveButton("开始缓存") { _, _ -> enqueueCacheBatch(missing) }
+                    .setNegativeButton("取消", null)
+                    .showForTv()
+            }
+        }
+    }
+
+    private fun enqueueCacheBatch(songs: List<Song>) {
+        cacheQueue?.let { main.removeCallbacks(cachePump) }
+        cacheQueue = java.util.ArrayDeque(songs)
+        // 本地曲库不限大小：关闭自动删歌与预留空间
+        autoDeleteSongs = false
+        reserveStorageGb = 0.0
+        saveState()
+        SongStorage.configure(store.downloadToUsb, store.usbTreeUri, 0.0, showUsbSongs, false)
+        toast("开始缓存 ${songs.size} 首（不限大小）")
+        main.post(cachePump)
+        openDownloadProgress()
+    }
+
     private fun warmRemoteBrowseCache(count: Int) {
         val pageSize = IgebaCatalog.PAGE_SIZE
         val songs = library.muse.hotSongs(0, pageSize * 2)
@@ -8034,6 +8102,8 @@ class MainActivity : AppCompatActivity() {
                     IgebaAccount.session?.let { "已登录：${it.nickname}" } ?: "登录或注册自己的账号，用于曲库更新与新歌播放",
                     "设置",
                 ) { IgebaAccountDialog.show(this) { showSettingsSection(1, false) } },
+                SettingsEntry(R.drawable.ott_ic_download_setting, "一键缓存缺失曲目",
+                    "对照本地曲库，把本地没有的曲目一键缓存到本地（不限大小）", "开始") { confirmCacheMissing() },
                 SettingsEntry(R.drawable.ott_ic_data_setting,
                     if (store.downloadToOpenList) "网盘加歌" else "U盘加歌",
                     if (store.downloadToOpenList) "扫描网盘歌曲目录并加入曲库检索" else "扫描 maidongktv 歌曲保存目录",
@@ -8055,6 +8125,15 @@ class MainActivity : AppCompatActivity() {
                     when { store.downloadToOpenList -> "OpenList 网盘"; store.downloadToUsb -> "U盘存储"; else -> "本地存储" },
                     "选择") { showDownloadLocationDialog() },
                 SettingsEntry(R.drawable.ott_ic_setting_storage_space, "预留存储空间", "当前 ${String.format(Locale.ROOT, "%.1f", reserveStorageGb)} GB") { showReserveStorageDialog() },
+                SettingsEntry(R.drawable.ott_ic_setting_storage_space, "本地曲库不限大小",
+                    if (!autoDeleteSongs && reserveStorageGb <= 0.0) "已开启：不预留空间、不自动删歌" else "开启后不预留空间、不自动删歌，本地曲库可无限增长",
+                    action = {
+                        val unlimited = !(!autoDeleteSongs && reserveStorageGb <= 0.0)
+                        autoDeleteSongs = !unlimited
+                        reserveStorageGb = if (unlimited) 0.0 else 1.0
+                        saveState()
+                        SongStorage.configure(store.downloadToUsb, store.usbTreeUri, reserveStorageGb, showUsbSongs, autoDeleteSongs)
+                    }, checked = (!autoDeleteSongs && reserveStorageGb <= 0.0)),
                 SettingsEntry(R.drawable.ott_ic_data_reset, "自动删歌", "当剩余存储空间低于预留空间时，自动删除最久未使用的歌曲", action = {
                     autoDeleteSongs = !autoDeleteSongs
                     saveState()
