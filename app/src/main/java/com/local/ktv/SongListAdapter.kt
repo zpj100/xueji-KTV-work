@@ -368,7 +368,7 @@ class SongListAdapter(
             addView(songInfo(song, stacked = false), LinearLayout.LayoutParams(0, dp(48), 1f))
             val progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply {
                 max = 100
-                progressDrawable = context.getDrawable(R.drawable.bg_download_progress)
+                progressDrawable = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.bg_download_progress)
             }
             addView(progress, LinearLayout.LayoutParams(dp(90), dp(8)).apply { marginEnd = dp(6) })
             val primary = android.widget.FrameLayout(context).apply {

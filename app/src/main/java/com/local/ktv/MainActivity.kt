@@ -102,8 +102,6 @@ import java.util.LinkedHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.function.Function
-import java.util.function.ToIntFunction
 import kotlin.Any
 import kotlin.Array
 import kotlin.Boolean
@@ -4323,10 +4321,9 @@ class MainActivity : AppCompatActivity() {
                 song
             )
         }
-        Collections.sort<Song?>(
-            visibleSongs,
-            Comparator.comparing<Song?, String?>(Function { song: Song? -> song!!.title!!.lowercase() })
-        )
+        visibleSongs.sortWith(Comparator { a: Song?, b: Song? ->
+            (a?.title ?: "").lowercase().compareTo((b?.title ?: "").lowercase())
+        })
         renderSongs()
     }
 
@@ -4340,10 +4337,9 @@ class MainActivity : AppCompatActivity() {
                 ))
             ) visibleSongs.add(song)
         }
-        Collections.sort<Song?>(
-            visibleSongs,
-            Comparator.comparing<Song?, String?>(Function { song: Song? -> song!!.title!!.lowercase() })
-        )
+        visibleSongs.sortWith(Comparator { a: Song?, b: Song? ->
+            (a?.title ?: "").lowercase().compareTo((b?.title ?: "").lowercase())
+        })
         renderSongs()
     }
 
@@ -4398,10 +4394,9 @@ class MainActivity : AppCompatActivity() {
                 song
             )
         }
-        Collections.sort<Song?>(
-            visibleSongs,
-            Comparator.comparing<Song?, String?>(Function { song: Song? -> song!!.title!!.lowercase() })
-        )
+        visibleSongs.sortWith(Comparator { a: Song?, b: Song? ->
+            (a?.title ?: "").lowercase().compareTo((b?.title ?: "").lowercase())
+        })
         renderSongs()
         if (pageInfo != null) pageInfo!!.setText("本地 " + visibleSongs.size + " 首")
     }
@@ -5434,10 +5429,9 @@ class MainActivity : AppCompatActivity() {
             BufferedReader(InputStreamReader(FileInputStream(file), "UTF-8")).use { reader ->
                 var line: String?
                 while ((reader.readLine().also { line = it }) != null) parseLyricLine(line)
-                Collections.sort<LyricLine?>(
-                    lyricLines, Comparator.comparingInt<LyricLine?>(
-                        ToIntFunction { item: LyricLine? -> item!!.timeMs })
-                )
+                lyricLines.sortWith(Comparator { a: LyricLine?, b: LyricLine? ->
+                    (a?.timeMs ?: 0).compareTo(b?.timeMs ?: 0)
+                })
                 updateLyricView()
             }
         } catch (e: Exception) {

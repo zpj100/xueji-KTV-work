@@ -34,6 +34,10 @@ internal object TvUiScale {
             screenHeightDp = (metrics.heightPixels / density).roundToInt()
             smallestScreenWidthDp = min(screenWidthDp, screenHeightDp)
         }
-        return context.createConfigurationContext(configuration)
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            context.createConfigurationContext(configuration)
+        } else {
+            context
+        }
     }
 }

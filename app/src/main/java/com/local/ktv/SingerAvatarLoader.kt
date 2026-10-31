@@ -39,7 +39,9 @@ object SingerAvatarLoader {
             return
         }
 
-        val waiters = waiting.computeIfAbsent(key) { CopyOnWriteArrayList() }
+        val waiters = synchronized(waiting) {
+            waiting[key] ?: CopyOnWriteArrayList<WeakReference<ImageView>>().also { waiting[key] = it }
+        }
         waiters += WeakReference(view)
         if (waiters.size > 1) return
         val cacheDir = File(view.context.applicationContext.cacheDir, "singer_avatars").apply { mkdirs() }
