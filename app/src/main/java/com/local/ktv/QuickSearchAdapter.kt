@@ -77,10 +77,7 @@ class QuickSearchAdapter(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             SingerAvatarLoader.load(this, singer.getOrNull(5), R.drawable.ic_singer_placeholder)
             scaleType = ImageView.ScaleType.CENTER_CROP
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) = outline.setOval(0, 0, view.width, view.height)
-            }
-            clipToOutline = true
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) ViewOutlineCompat.oval(this)
         }, LinearLayout.LayoutParams(dp(88), dp(88)).apply { topMargin = dp(5) })
         addView(TextView(context).apply {
             text = name

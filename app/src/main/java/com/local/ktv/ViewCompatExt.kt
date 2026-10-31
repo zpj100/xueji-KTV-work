@@ -17,3 +17,8 @@ fun View.setBackgroundCompat(drawable: Drawable?) {
 /** API 15 及以下无法读取 background，返回 false 视为未设置。 */
 fun View.hasBackgroundCompat(): Boolean =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) background != null else false
+
+/** View.setElevation 需要 API 21，4.x 忽略阴影。 */
+fun View.setElevationCompat(value: Float) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) elevation = value
+}

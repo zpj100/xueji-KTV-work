@@ -3200,7 +3200,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(dp(4), dp(4), dp(4), dp(3))
             setBackgroundColor(Color.argb(218, 255, 255, 255))
-            elevation = dp(12).toFloat()
+            setElevationCompat(dp(12).toFloat())
             addView(ImageView(this@MainActivity).apply {
                 setImageBitmap(qrBitmap(url, qrSize))
                 contentDescription = "扫码手机点歌"
@@ -6409,7 +6409,7 @@ class MainActivity : AppCompatActivity() {
                 isClickable = false
                 isFocusable = false
                 visibility = View.GONE
-                elevation = dp(6).toFloat()
+                setElevationCompat(dp(6).toFloat())
             }.also { root.addView(it, insertionIndex + 1, FrameLayout.LayoutParams(1, 1)) }
             playbackModeNotice = TextView(this).apply {
                 gravity = Gravity.CENTER
@@ -6417,7 +6417,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(Color.WHITE)
                 visibility = View.GONE
                 alpha = 0f
-                elevation = dp(8).toFloat()
+                setElevationCompat(dp(8).toFloat())
             }.also { root.addView(it, insertionIndex + 1, FrameLayout.LayoutParams(dp(104), dp(104))) }
             songIntroNotice = TextView(this).apply {
                 gravity = Gravity.CENTER_VERTICAL
@@ -6427,7 +6427,7 @@ class MainActivity : AppCompatActivity() {
                 maxLines = 2
                 visibility = View.GONE
                 alpha = 0f
-                elevation = dp(7).toFloat()
+                setElevationCompat(dp(7).toFloat())
             }.also { root.addView(it, insertionIndex + 1, FrameLayout.LayoutParams(dp(330), dp(92))) }
             songIntroIcon = TextView(this).apply {
                 text = "♫"
@@ -6443,14 +6443,14 @@ class MainActivity : AppCompatActivity() {
                 })
                 visibility = View.GONE
                 alpha = 0f
-                elevation = dp(9).toFloat()
+                setElevationCompat(dp(9).toFloat())
             }.also { root.addView(it, insertionIndex + 2, FrameLayout.LayoutParams(dp(78), dp(78))) }
             playerTouchOverlay = View(this).apply {
                 setBackgroundColor(Color.TRANSPARENT)
                 isClickable = true
                 isFocusable = false
                 setOnClickListener { showFullScreenPlayer() }
-                elevation = dp(10).toFloat()
+                setElevationCompat(dp(10).toFloat())
             }.also { root.addView(it, insertionIndex + 1, FrameLayout.LayoutParams(1, 1)) }
         }
         homeVideo = persistentVideo
@@ -8468,7 +8468,7 @@ class MainActivity : AppCompatActivity() {
                 setBackgroundColor(Color.rgb(24, 17, 45))
                 isClickable = true
                 isFocusable = true
-                elevation = dp(30).toFloat()
+                setElevationCompat(dp(30).toFloat())
             }
             val center = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
