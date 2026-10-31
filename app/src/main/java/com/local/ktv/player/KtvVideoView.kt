@@ -231,7 +231,10 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         // 本地媒体文件优先走系统 MediaPlayer：Android 4.4 原生支持 MKV(Vorbis)/MP4/MP3，
         // 而精简版 IJK 的 FFmpeg 缺 Vorbis 等解码器；直播/网络流仍走 IJK（支持 RTMP/HLS）。
         isLiveStream = !isLocalMedia(uri)
-        if (!isLiveStream && prepareSystem(uri)) return
+        // audioOnly（伴唱引擎）强制走 IJK：4.4 只有一个视频硬解码器，第二个系统实例会起不来；
+        // IJK 在 vn=1 下只解音频，可与主引擎的系统播放器并存。
+        val preferSystem = !audioOnly && !isLiveStream
+        if (preferSystem && prepareSystem(uri)) return
         useSystemPlayer = false
         val player = ensureIjkPlayer()
         if (player == null) {
@@ -385,13 +388,11 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
                     infos[it].trackType == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO
                 }
                 if (audio.size < 2) return@runCatching false
-                // Android 4.4 播放中直接 selectTrack 常不生效：先暂停再切轨，切完恢复位置与播放。
-                val wasPlaying = runCatching { mp.isPlaying }.getOrDefault(false)
-                val pos = runCatching { mp.currentPosition }.getOrDefault(0)
-                if (wasPlaying) runCatching { mp.pause() }
                 val target = if (original) audio[0] else audio[1]
+                // 播放中直接切轨在 4.4 上偶发不生效，先暂停；不做 seek（会打断音频输出）。
+                val wasPlaying = runCatching { mp.isPlaying }.getOrDefault(false)
+                if (wasPlaying) runCatching { mp.pause() }
                 mp.selectTrack(target)
-                if (pos > 0) runCatching { mp.seekTo(pos) }
                 if (wasPlaying) runCatching { mp.start() }
                 Log.i(TAG, "system selectTrack original=$original target=$target audio=$audio")
                 true
