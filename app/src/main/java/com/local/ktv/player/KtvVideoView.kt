@@ -3,6 +3,8 @@ package com.local.ktv.player
 import android.content.Context
 import android.graphics.Color
 import android.media.AudioManager
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaPlayer
 import android.net.Uri
 import android.util.AttributeSet
@@ -231,9 +233,15 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         // 本地媒体文件优先走系统 MediaPlayer：Android 4.4 原生支持 MKV(Vorbis)/MP4/MP3，
         // 而精简版 IJK 的 FFmpeg 缺 Vorbis 等解码器；直播/网络流仍走 IJK（支持 RTMP/HLS）。
         isLiveStream = !isLocalMedia(uri)
-        // audioOnly（伴唱引擎）强制走 IJK：4.4 只有一个视频硬解码器，第二个系统实例会起不来；
-        // IJK 在 vn=1 下只解音频，可与主引擎的系统播放器并存。
-        val preferSystem = !audioOnly && !isLiveStream
+        // 分流策略（4.4 实测）：
+        //  · 单音轨本地文件 → 系统 MediaPlayer（能解 Vorbis 等精简 IJK 缺失的编码，不需要切轨）
+        //  · 多音轨本地文件（KTV 原唱/伴唱）→ IJK（系统 MediaPlayer 的 selectTrack 会打断音频输出，
+        //    且 4.4 只有单个视频解码器无法开双实例）
+        //  · audioOnly 伴唱引擎 → 强制 IJK（只解音频）
+        //  · 直播 → IJK
+        val audioTracks = if (isLiveStream) 0 else probeAudioTrackCount(uri)
+        val preferSystem = !audioOnly && !isLiveStream && audioTracks <= 1
+        Log.i(TAG, "route uri=$uri audioTracks=$audioTracks audioOnly=$audioOnly preferSystem=$preferSystem")
         if (preferSystem && prepareSystem(uri)) return
         useSystemPlayer = false
         val player = ensureIjkPlayer()
@@ -253,6 +261,27 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
             }
         }
     }
+
+    /** 快速探测音频轨数量（不播放）。失败返回 -1 表示未知。 */
+    private fun probeAudioTrackCount(uri: Uri): Int = runCatching {
+        val extractor = MediaExtractor()
+        try {
+            val scheme = uri.scheme?.lowercase()
+            if (scheme == "content") {
+                extractor.setDataSource(appContext, uri, null)
+            } else {
+                extractor.setDataSource(if (scheme == "file") uri.path.orEmpty() else uri.toString())
+            }
+            var count = 0
+            for (i in 0 until extractor.trackCount) {
+                val mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("audio/")) count++
+            }
+            count
+        } finally {
+            runCatching { extractor.release() }
+        }
+    }.getOrDefault(-1)
 
     /** 本地媒体文件扩展名（系统 MediaPlayer 在 4.4 上原生支持这些容器）。 */
     private fun isLocalMedia(uri: Uri): Boolean {
