@@ -52,4 +52,19 @@
    - 本仓库 Release 附件：`https://gitee.com/zpj100/xueji-KTV-work/releases/download/catalog-latest/igeba_catalog.db`（匿名可下载，随上游同步）
 4. **完整性校验**：下载完成后校验 SHA 与上游一致，才替换本地曲库；失败保留原库。
 
+## 一条命令同步上游曲库
+
+```bash
+bash tools/sync_catalog.sh            # 拉上游最新 db → 更新本地 assets → 上传 catalog-latest
+bash tools/sync_catalog.sh --no-local # 只更新 Release，不改本地 assets
+bash tools/sync_catalog.sh --dry-run  # 只查上游版本，不下载不上传
+bash tools/sync_catalog.sh --force    # 本地已一致也强制重新下载并上传
+```
+
+脚本做的事：查上游 sha → 与本地比对 → 用 **git blobs API**（token 可读，绕开 raw 的大文件登录限制）取回 db → 校验 sha → 更新本地 `app/src/main/assets/igeba_catalog.db` → 删除 `catalog-latest` 旧附件 → 上传新附件（正确文件名）→ 远端下载回验 sha。
+
+- 依赖：`curl`、`python`；`GITEE_TOKEN` 自动从 `xueji_env.sh` 读取。
+- 无变化时会自动跳过上传（比对附件大小），日常执行秒级完成。
+- 遇到 `catalog-latest` 不存在时，先手动创建一个该 tag 的 Release。
+
 > 维护提示：上游更新曲库后，需把新的 `igeba_catalog.db` 重新上传到本仓库的 `catalog-latest` Release 附件，App 才能下载到新版。
