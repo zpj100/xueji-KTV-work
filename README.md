@@ -26,6 +26,18 @@
 - 本地、U 盘与 OpenList 网盘使用统一的扫描、检索和保存流程；应用下载的编号文件自动关联曲库，外部歌曲按 `歌手-歌名` 解析。
 - [查看发布版本（Gitee）](https://gitee.com/zpj100/xueji-KTV-work/releases) · [查看发布版本（GitHub）](https://github.com/zpj100/xueji-KTV-work/releases) · [OpenList 设置说明](docs/openlist.md)
 
+## 上游项目（源项目 / 更新项目）
+
+本项目派生自以下**上游项目（源项目、更新项目）**，功能演进、曲库数据与问题修复均以上游为准：
+
+| 项目 | 地址 | 备注 |
+|---|---|---|
+| maidong-ktv（麦动 KTV） | https://gitee.com/yangyachao-X/maidong-ktv | **上游项目 / 源项目 / 更新项目** |
+
+- 上游默认分支：`feature/igeba-media`（本仓库同样基于该分支派生）。
+- 跟踪上游更新时，以该仓库的提交与 Release 为基准；本仓库仅在其基础上做品牌与本地化定制。
+- 上游内置离线曲库：`app/src/main/assets/igeba_catalog.db`（81,801 首歌曲、4,807 位歌星、63 个分类歌单、7 个排行榜）。
+
 ## 本仓库定制说明（学记KTV）
 
 本仓库由 `yangyachao-X/maidong-ktv` 派生并重命名定制，相对上游的主要改动：

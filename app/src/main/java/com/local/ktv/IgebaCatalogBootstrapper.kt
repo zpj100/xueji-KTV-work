@@ -36,7 +36,8 @@ object IgebaCatalogBootstrapper {
         if (!AppPaths.databaseFile.isFile) {
             CatalogAssets.install(); onProgress(100); return@runCatching AppPaths.databaseFile
         }
-        val version = fetchRemoteVersion() ?: error("无法连接新歌源目录")
+        val version = fetchRemoteVersion()
+            ?: error("i歌霸在线曲库已停止服务（服务端要求鸿蒙客户端），无法在线更新，继续使用内置曲库")
         val target = AppPaths.databaseFile
         val temporary = File(target.parentFile, "igeba_catalog.sync")
         temporary.delete()

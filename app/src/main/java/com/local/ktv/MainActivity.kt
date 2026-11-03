@@ -570,7 +570,7 @@ class MainActivity : AppCompatActivity() {
         io.execute {
             val result = runCatching {
                 val remote = IgebaCatalogBootstrapper.fetchRemoteVersion()
-                    ?: error("无法连接 i歌霸曲库，请检查网络")
+                    ?: error("i歌霸在线曲库已停止服务（服务端要求鸿蒙客户端），继续使用内置曲库")
                 val local = IgebaCatalogBootstrapper.getLocalDbVersion()
                 if (remote == local) false else {
                     library.muse.close()
