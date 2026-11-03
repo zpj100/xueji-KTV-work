@@ -239,9 +239,16 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         //    且 4.4 只有单个视频解码器无法开双实例）
         //  · audioOnly 伴唱引擎 → 强制 IJK（只解音频）
         //  · 直播 → IJK
-        val audioTracks = if (isLiveStream) 0 else probeAudioTrackCount(uri)
-        val preferSystem = !audioOnly && !isLiveStream && audioTracks <= 1
-        Log.i(TAG, "route uri=$uri audioTracks=$audioTracks audioOnly=$audioOnly preferSystem=$preferSystem")
+        val (audioTracks, audioMime) = if (isLiveStream) 0 to "" else probeAudioInfo(uri)
+        // 单音轨、或音频编码 IJK 解不了（Vorbis/FLAC/AC3/Opus…）→ 系统 MediaPlayer；
+        // 多音轨且 IJK 能解（MP2/MP3/AAC）→ IJK（切原唱/伴唱稳定）。
+        val ijkCanDecode = ijkCanDecodeAudio(audioMime)
+        val preferSystem = !audioOnly && !isLiveStream && (audioTracks <= 1 || !ijkCanDecode)
+        Log.i(
+            TAG,
+            "route uri=$uri audioTracks=$audioTracks mime=$audioMime ijkDecode=$ijkCanDecode " +
+                "audioOnly=$audioOnly preferSystem=$preferSystem",
+        )
         if (preferSystem && prepareSystem(uri)) return
         useSystemPlayer = false
         val player = ensureIjkPlayer()
@@ -262,8 +269,8 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         }
     }
 
-    /** 快速探测音频轨数量（不播放）。失败返回 -1 表示未知。 */
-    private fun probeAudioTrackCount(uri: Uri): Int = runCatching {
+    /** 探测音频信息：(音轨数, 首个音频 MIME)。失败返回 (-1, "")。 */
+    private fun probeAudioInfo(uri: Uri): Pair<Int, String> = runCatching {
         val extractor = MediaExtractor()
         try {
             val scheme = uri.scheme?.lowercase()
@@ -273,15 +280,25 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
                 extractor.setDataSource(if (scheme == "file") uri.path.orEmpty() else uri.toString())
             }
             var count = 0
+            var firstMime = ""
             for (i in 0 until extractor.trackCount) {
                 val mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: ""
-                if (mime.startsWith("audio/")) count++
+                if (mime.startsWith("audio/")) {
+                    count++
+                    if (firstMime.isEmpty()) firstMime = mime
+                }
             }
-            count
+            count to firstMime
         } finally {
             runCatching { extractor.release() }
         }
-    }.getOrDefault(-1)
+    }.getOrDefault(-1 to "")
+
+    /** 精简版 IJK 的 FFmpeg 只编了 MP1/MP2/MP3/AAC 解码器，其余（Vorbis/FLAC/AC3/Opus）必须交给系统播放器。 */
+    private fun ijkCanDecodeAudio(mime: String): Boolean {
+        val m = mime.lowercase()
+        return m == "audio/mpeg" || m == "audio/mp4a-latm" || m == "audio/aac" || m.contains("mp3")
+    }
 
     /** 本地媒体文件扩展名（系统 MediaPlayer 在 4.4 上原生支持这些容器）。 */
     private fun isLocalMedia(uri: Uri): Boolean {
@@ -410,22 +427,10 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
 
     fun selectAudioTrack(original: Boolean): Boolean {
         if (useSystemPlayer) {
-            val mp = sysPlayer ?: return false
-            return runCatching {
-                val infos = mp.trackInfo ?: return@runCatching false
-                val audio = infos.indices.filter {
-                    infos[it].trackType == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO
-                }
-                if (audio.size < 2) return@runCatching false
-                val target = if (original) audio[0] else audio[1]
-                // 播放中直接切轨在 4.4 上偶发不生效，先暂停；不做 seek（会打断音频输出）。
-                val wasPlaying = runCatching { mp.isPlaying }.getOrDefault(false)
-                if (wasPlaying) runCatching { mp.pause() }
-                mp.selectTrack(target)
-                if (wasPlaying) runCatching { mp.start() }
-                Log.i(TAG, "system selectTrack original=$original target=$target audio=$audio")
-                true
-            }.getOrDefault(false)
+            // Android 4.x 的系统 MediaPlayer 在播放中 selectTrack 会打断音频输出（切完全静音），
+            // 因此系统播放器路径不支持切轨：保持默认音轨有声音优先。
+            Log.i(TAG, "system player: track switch disabled (would mute audio on 4.x)")
+            return false
         }
         return runCatching {
             val ijk = ijkPlayer ?: return@runCatching false

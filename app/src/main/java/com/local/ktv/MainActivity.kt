@@ -5087,6 +5087,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyPlaybackMode() {
         val videoPlayer = player ?: return
+        // 系统 MediaPlayer 路径（单音轨，或 Vorbis/FLAC 等 IJK 解不了的编码）：
+        // 4.4 上 selectTrack 会打断音频输出，无法切原唱/伴唱；此处直接按当前音量播默认音轨，
+        // 并释放可能已启动的伴唱引擎（IJK 解不了这类编码，留着只会干扰音量）。
+        if (videoPlayer.isSystemPlayer) {
+            if (embeddedDualTrackMode || vocalPlayer != null) releaseVocalPlayer()
+            val v = if ("静音练唱" == singMode) 0f else max(0f, min(1f, musicVolume / 100f))
+            videoPlayer.setPlaybackVolume(v, v)
+            status?.text = "当前格式不支持切换原唱/伴唱"
+            Log.i(TAG, "applyPlaybackMode(system): volume=$v, track switch skipped")
+            return
+        }
         videoPlayer.setTone(tone)
         vocalPlayer?.setTone(tone)
         embeddedVocalEngine?.setTone(tone)
