@@ -1,160 +1,146 @@
 package com.local.ktv
 
-import android.content.ContentValues
-import android.database.sqlite.SQLiteDatabase
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
 import java.util.Locale
 
-/** 目录更新只读取公开接口，失败时保留上一份 i歌霸快照。 */
+/**
+ * 曲库更新：跟随上游项目（源项目 / 更新项目）的内置离线曲库。
+ *
+ * 上游：https://gitee.com/yangyachao-X/maidong-ktv （分支 feature/igeba-media）
+ * 背景：i歌霸在线曲库接口（cloud.php 的 GET_SONGS）已被服务端关闭，返回「请使用鸿蒙客户端」，
+ *      因此改为比对上游仓库中 igeba_catalog.db 的 Git blob SHA-1，有变化才下载整份数据库。
+ * 注意：Gitee raw 对 20MB 以上的文件要求登录，故下载优先走 raw、失败回退到本仓库 Release 附件。
+ */
 object IgebaCatalogBootstrapper {
-    val manifestUrl: String get() = IgebaApiClient.CLOUD_URL
-    private const val SIZE = 1000
+    /** 上游项目（源项目 / 更新项目） */
+    const val UPSTREAM_OWNER = "yangyachao-X"
+    const val UPSTREAM_REPO = "maidong-ktv"
+    const val UPSTREAM_BRANCH = "feature/igeba-media"
+    private const val DB_REPO_PATH = "app/src/main/assets/igeba_catalog.db"
+
+    /** 备用下载源：本仓库 Release 附件（匿名可下载）。 */
+    private const val FALLBACK_URL =
+        "https://gitee.com/zpj100/xueji-KTV-work/releases/download/catalog-latest/igeba_catalog.db"
+
     private val chars by lazy { JSONObject(CatalogAssets.pinyinChars()) }
 
+    private fun upstreamApiUrl(): String =
+        "https://gitee.com/api/v5/repos/$UPSTREAM_OWNER/$UPSTREAM_REPO/contents/$DB_REPO_PATH?ref=$UPSTREAM_BRANCH"
+
+    private fun upstreamRawUrl(): String =
+        "https://gitee.com/$UPSTREAM_OWNER/$UPSTREAM_REPO/raw/$UPSTREAM_BRANCH/$DB_REPO_PATH"
+
+    private fun versionFile(): File = File(AppPaths.databaseFile.parentFile, "igeba_catalog.sha")
+
+    /** 远程版本 = 上游 igeba_catalog.db 的 Git blob SHA-1。 */
     fun fetchRemoteVersion(): String? = runCatching {
-        val r = IgebaApiClient.songs(1, 1)
-        r.getJSONArray("List").getJSONObject(0).getString("SongNumber") + ":" +
-            r.getJSONObject("Page").getString("RecordCount")
+        val connection = URL(upstreamApiUrl()).openConnection() as HttpURLConnection
+        try {
+            connection.connectTimeout = 15_000
+            connection.readTimeout = 25_000
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) XuejiKTV")
+            if (connection.responseCode !in 200..299) return@runCatching null
+            val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            JSONObject(body).optString("sha").takeIf { it.length == 40 }
+        } finally {
+            connection.disconnect()
+        }
     }.getOrNull()
+
+    /** 本地版本：优先读上次记录的 SHA，否则现场计算当前曲库的 Git blob SHA-1。 */
     fun getLocalDbVersion(): String? {
         CatalogAssets.install()
-        return metadata(AppPaths.databaseFile, "remote_version")
-    }
-    private fun metadata(file: File, key: String): String? {
-        if (!file.isFile) return null
-        val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-        return try {
-            db.rawQuery("SELECT value FROM meta WHERE key=?", arrayOf(key)).use {
-                if (it.moveToFirst()) it.getString(0) else null
-            }
-        } finally { db.close() }
+        versionFile().takeIf { it.isFile }
+            ?.readText()?.trim()?.takeIf { it.length == 40 }
+            ?.let { return it }
+        val sha = gitBlobSha(AppPaths.databaseFile) ?: return null
+        runCatching { versionFile().writeText(sha) }
+        return sha
     }
 
+    /** 下载并替换曲库；校验 SHA 与上游一致后才安装，失败时保留原曲库。 */
     fun download(onProgress: (Int) -> Unit): Result<File> = runCatching {
-        if (!AppPaths.databaseFile.isFile) {
-            CatalogAssets.install(); onProgress(100); return@runCatching AppPaths.databaseFile
-        }
-        val version = fetchRemoteVersion()
-            ?: error("i歌霸在线曲库已停止服务（服务端要求鸿蒙客户端），无法在线更新，继续使用内置曲库")
+        val version = fetchRemoteVersion() ?: error("无法连接上游曲库（Gitee），请检查网络")
         val target = AppPaths.databaseFile
         val temporary = File(target.parentFile, "igeba_catalog.sync")
         temporary.delete()
-        val db = SQLiteDatabase.openOrCreateDatabase(temporary, null)
-        try {
-            schema(db)
-            val singerNames = linkedMapOf<String, String>()
-            db.beginTransaction()
+        var lastError: Throwable? = null
+        for (url in listOf(upstreamRawUrl(), FALLBACK_URL)) {
             try {
-                pageAll({ page -> IgebaApiClient.songs(page, SIZE) }) { row, index, page, pages ->
-                    putSong(db, row, index); onProgress((page * 55 / pages).coerceIn(0,55))
+                downloadTo(url, temporary, onProgress)
+                check(gitBlobSha(temporary) == version) { "曲库校验失败（与上游版本不一致）" }
+                val backup = File(target.parentFile, "igeba_catalog.previous")
+                backup.delete()
+                if (target.isFile && !target.renameTo(backup)) error("无法暂存上一份曲库")
+                if (!temporary.renameTo(target)) {
+                    backup.renameTo(target)
+                    error("无法安装新曲库")
                 }
-                pageAll({ page -> IgebaApiClient.packages(1, page, SIZE) }) { row, index, _, _ ->
-                    val name = row.optString("SingerName")
-                    val mark = row.optString("Mark")
-                    val number = row.getString("SingerId")
-                    singerNames[name] = number
-                    insert(db, "source_singers", ContentValues().apply {
-                        put("number", number); put("name", name)
-                        put("region", listOf("大陆","港台","日韩","欧美").firstOrNull { it in mark } ?: "其他")
-                        put("type", when { "男" in mark -> "男"; "女" in mark -> "女"; else -> "组合" })
-                        put("pinyin", initials(name)); put("pinyin_full", fullPinyin(name))
-                        put("image_url", row.optString("MidPicture").ifBlank { row.optString("SmallPicture") })
-                        put("sort_no", index)
-                    })
-                }
-                onProgress(60)
-                val packages = mutableListOf<Pair<Int, JSONObject>>()
-                for (type in listOf(3,4)) pageAll({ p -> IgebaApiClient.packages(type, p, SIZE) }) { row, _, _, _ -> packages += type to row }
-                packages.forEachIndexed { index, (type, row) ->
-                    val number = row.getString(if (type == 3) "PlayId" else "RankId")
-                    var count = 0
-                    pageAll({ p -> IgebaApiClient.songs(p, SIZE, JSONObject().put("Package",
-                        JSONObject().put("Type",type).put("Id",number))) }) { song, order, _, _ ->
-                        putSong(db, song, 1_000_000 + index * SIZE + order)
-                        insert(db, "source_playlist_songs", ContentValues().apply {
-                            put("playlist_number",number); put("package_type",type)
-                            put("song_number",song.getString("SongNumber")); put("sort_no",order)
-                        })
-                        count++
-                    }
-                    insert(db,"source_playlists",ContentValues().apply {
-                        put("number",number); put("package_type",type)
-                        put("name",row.optString(if(type==3) "PlayTitle" else "RankTitle"))
-                        put("picture",row.optString("Picture")); put("description",row.optString("Description"))
-                        put("sort_no",index); put("song_count",count)
-                    })
-                    onProgress(60 + (index + 1) * 30 / packages.size.coerceAtLeast(1))
-                }
-                db.rawQuery("SELECT number,singer FROM source_songs",null).use { c ->
-                    while(c.moveToNext()) {
-                        val name=c.getString(1)
-                        (listOf(name) + name.split(Regex("[/、&]+"))).distinct().forEach { part ->
-                            singerNames[part.trim()]?.let { id -> insert(db,"source_singer_songs",ContentValues().apply {
-                                put("singer_number",id); put("song_number",c.getString(0))
-                            }) }
-                        }
-                    }
-                }
-                insert(db,"meta",ContentValues().apply { put("key","provider"); put("value","igeba") })
-                insert(db,"meta",ContentValues().apply { put("key","schema_version"); put("value","1") })
-                insert(db,"meta",ContentValues().apply { put("key","remote_version"); put("value",version) })
-                db.setTransactionSuccessful()
-            } finally { db.endTransaction() }
-            db.rawQuery("PRAGMA integrity_check",null).use { check(it.moveToFirst() && it.getString(0)=="ok") { "新目录校验失败" } }
-            onProgress(95)
-        } catch (error: Throwable) {
-            db.close(); temporary.delete(); throw error
-        } finally { if(db.isOpen) db.close() }
-        val backup=File(target.parentFile,"igeba_catalog.previous")
-        backup.delete()
-        check(target.renameTo(backup)) { "无法暂存上一份新目录" }
-        if(!temporary.renameTo(target)) { backup.renameTo(target); error("无法安装新目录") }
-        backup.delete(); onProgress(100); target
+                backup.delete()
+                runCatching { versionFile().writeText(version) }
+                onProgress(100)
+                return@runCatching target
+            } catch (error: Throwable) {
+                lastError = error
+                temporary.delete()
+            }
+        }
+        throw lastError ?: IOException("所有曲库下载通道均不可用")
     }
 
-    private fun pageAll(request: (Int)->JSONObject, consume: (JSONObject,Int,Int,Int)->Unit) {
-        var page=1; var pages=1
-        do {
-            val result=request(page)
-            pages=result.optJSONObject("Page")?.optInt("PageCount",1)?.coerceAtLeast(1) ?: 1
-            val list=result.getJSONArray("List")
-            repeat(list.length()) { consume(list.getJSONObject(it),(page-1)*SIZE+it,page,pages) }
-            page++
-        } while(page<=pages)
+    private fun downloadTo(url: String, target: File, onProgress: (Int) -> Unit) {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        try {
+            connection.connectTimeout = 15_000
+            connection.readTimeout = 60_000
+            connection.instanceFollowRedirects = true
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) XuejiKTV")
+            if (connection.responseCode !in 200..299) throw IOException("HTTP ${connection.responseCode}")
+            val total = connection.contentLength.toLong()
+            var read = 0L
+            connection.inputStream.use { input ->
+                target.outputStream().use { out ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count <= 0) break
+                        out.write(buffer, 0, count)
+                        read += count
+                        if (total > 0) onProgress((read * 92 / total).toInt().coerceIn(0, 92))
+                    }
+                }
+            }
+            check(target.length() > 0) { "下载内容为空" }
+        } finally {
+            connection.disconnect()
+        }
     }
-    private fun insert(db: SQLiteDatabase, table: String, values: ContentValues) {
-        db.insertWithOnConflict(table,null,values,SQLiteDatabase.CONFLICT_IGNORE)
-    }
-    internal fun fullPinyin(name: String): String = name.map { chars.optString(it.toString(),it.toString()) }.joinToString("").uppercase(Locale.ROOT)
-    internal fun initials(name: String): String = name.map { chars.optString(it.toString(),it.toString()).take(1) }.joinToString("").uppercase(Locale.ROOT)
-    private fun putSong(db: SQLiteDatabase, row: JSONObject, order: Int) {
-        val name=row.optString("SongName")
-        insert(db,"source_songs",ContentValues().apply {
-            put("number",row.getString("SongNumber")); put("name",name); put("singer",row.optString("SingerName"))
-            put("language",row.optString("LanguageName")); put("filename",row.optString("FileName"))
-            put("version",row.optString("Version")); put("duration",row.optInt("Duration"))
-            put("voice_channel",row.optInt("VoiceChannel")); put("pinyin",initials(name)); put("pinyin_full",fullPinyin(name))
-            put("name_len",name.count { it.isLetterOrDigit() }); put("sort_no",order); put("album",row.optString("Album"))
-        })
-    }
-    private fun schema(db: SQLiteDatabase) {
-        listOf(
-            "CREATE TABLE source_songs(number TEXT PRIMARY KEY,name TEXT NOT NULL,singer TEXT NOT NULL,language TEXT NOT NULL,filename TEXT NOT NULL,version TEXT NOT NULL,duration INTEGER NOT NULL,voice_channel INTEGER NOT NULL,pinyin TEXT NOT NULL,pinyin_full TEXT NOT NULL,name_len INTEGER NOT NULL,sort_no INTEGER NOT NULL,album TEXT NOT NULL)",
-            "CREATE TABLE source_singers(number TEXT PRIMARY KEY,name TEXT NOT NULL,region TEXT NOT NULL,type TEXT NOT NULL,pinyin TEXT NOT NULL,pinyin_full TEXT NOT NULL,image_url TEXT NOT NULL,sort_no INTEGER NOT NULL)",
-            "CREATE TABLE source_playlists(number TEXT NOT NULL,package_type INTEGER NOT NULL,name TEXT NOT NULL,picture TEXT NOT NULL,description TEXT NOT NULL,sort_no INTEGER NOT NULL,song_count INTEGER NOT NULL,PRIMARY KEY(number,package_type))",
-            "CREATE TABLE source_playlist_songs(playlist_number TEXT NOT NULL,package_type INTEGER NOT NULL,song_number TEXT NOT NULL,sort_no INTEGER NOT NULL,PRIMARY KEY(playlist_number,package_type,song_number))",
-            "CREATE TABLE source_singer_songs(singer_number TEXT NOT NULL,song_number TEXT NOT NULL,PRIMARY KEY(singer_number,song_number))",
-            "CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)",
-            "CREATE INDEX song_name ON source_songs(name)",
-            "CREATE INDEX singer_name ON source_singers(name)",
-            "CREATE INDEX singer_song ON source_singer_songs(song_number)",
-            "CREATE INDEX song_order ON source_songs(sort_no)",
-            "CREATE INDEX song_language ON source_songs(language,sort_no)",
-            "CREATE INDEX song_length ON source_songs(name_len,sort_no)",
-            "CREATE INDEX song_filename ON source_songs(filename)",
-            "CREATE INDEX playlist_song ON source_playlist_songs(song_number,package_type)"
-        ).forEach(db::execSQL)
-    }
+
+    /** 计算 Git blob SHA-1，与 Gitee/GitHub contents API 返回的 sha 算法一致。 */
+    private fun gitBlobSha(file: File): String? = runCatching {
+        if (!file.isFile) return@runCatching null
+        val digest = MessageDigest.getInstance("SHA-1")
+        digest.update("blob ${file.length()}\u0000".toByteArray(Charsets.UTF_8))
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count <= 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+    }.getOrNull()
+
+    internal fun fullPinyin(name: String): String =
+        name.map { chars.optString(it.toString(), it.toString()) }.joinToString("").uppercase(Locale.ROOT)
+
+    internal fun initials(name: String): String =
+        name.map { chars.optString(it.toString(), it.toString()).take(1) }.joinToString("").uppercase(Locale.ROOT)
 }

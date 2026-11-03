@@ -566,11 +566,11 @@ class MainActivity : AppCompatActivity() {
     private fun updateIgebaCatalog() {
         if (databaseBootstrapRunning) { toast("曲库正在处理，请稍后重试"); return }
         databaseBootstrapRunning = true
-        busy(true, "正在检查 i歌霸曲库更新…")
+        busy(true, "正在检查上游曲库更新…")
         io.execute {
             val result = runCatching {
                 val remote = IgebaCatalogBootstrapper.fetchRemoteVersion()
-                    ?: error("i歌霸在线曲库已停止服务（服务端要求鸿蒙客户端），继续使用内置曲库")
+                    ?: error("无法连接上游曲库（Gitee），请检查网络")
                 val local = IgebaCatalogBootstrapper.getLocalDbVersion()
                 if (remote == local) false else {
                     library.muse.close()

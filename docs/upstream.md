@@ -38,4 +38,18 @@
 | 歌曲地址 `GET_SONGADDR` | `http://app.ige8.net/telnet.php` | ✅ 正常（返回 `Rights.Code=1` 与播放地址） |
 | 账号注册 | `http://gc.amanktv.cn/usr.php` | ✅ 可达 |
 
-**结论**：i歌霸仅保留了「取歌曲播放地址」接口，关闭了「在线曲库目录」接口。上游 2.1.7 仍使用 `VER=6`，因此上游同样无法在线更新曲库，需依赖 APK 内置曲库。本项目的曲库查询、检索、下载与播放不受影响（曲库已内置且为最新），仅「检查曲库更新」会提示失败。
+**结论**：i歌霸仅保留了「取歌曲播放地址」接口，关闭了「在线曲库目录」接口。上游 2.1.7 仍使用 `VER=6`，因此上游同样无法在线更新曲库，需依赖 APK 内置曲库。
+
+## 本项目的曲库更新策略（v2.3.6 起）
+
+自 v2.3.6 起，「曲库更新」不再调用 i歌霸接口，改为**跟随上游 Gitee 仓库**：
+
+1. **版本比对**：调用 Gitee contents API 读取上游 `app/src/main/assets/igeba_catalog.db` 的 Git blob SHA-1：
+   `https://gitee.com/api/v5/repos/yangyachao-X/maidong-ktv/contents/app/src/main/assets/igeba_catalog.db?ref=feature/igeba-media`
+2. **本地版本**：优先读取应用目录下的 `igeba_catalog.sha`；无记录时现场计算本地 db 的 Git blob SHA-1（算法与 Gitee 一致）。
+3. **按需下载**：SHA 不同才下载，通道依次为
+   - 上游 raw：`https://gitee.com/yangyachao-X/maidong-ktv/raw/feature/igeba-media/app/src/main/assets/igeba_catalog.db`（Gitee 对 >20MB 文件要求登录，通常 403）
+   - 本仓库 Release 附件：`https://gitee.com/zpj100/xueji-KTV-work/releases/download/catalog-latest/igeba_catalog.db`（匿名可下载，随上游同步）
+4. **完整性校验**：下载完成后校验 SHA 与上游一致，才替换本地曲库；失败保留原库。
+
+> 维护提示：上游更新曲库后，需把新的 `igeba_catalog.db` 重新上传到本仓库的 `catalog-latest` Release 附件，App 才能下载到新版。
