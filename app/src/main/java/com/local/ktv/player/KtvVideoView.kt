@@ -242,11 +242,11 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         val (audioTracks, audioMime) = if (isLiveStream) 0 to "" else probeAudioInfo(uri)
         // 单音轨、或音频编码 IJK 解不了（Vorbis/FLAC/AC3/Opus…）→ 系统 MediaPlayer；
         // 多音轨且 IJK 能解（MP2/MP3/AAC）→ IJK（切原唱/伴唱稳定）。
-        val ijkCanDecode = ijkCanDecodeAudio(audioMime)
-        val preferSystem = !audioOnly && !isLiveStream && (audioTracks <= 1 || !ijkCanDecode)
+        val ijkUnsupported = ijkCannotDecodeAudio(audioMime)
+        val preferSystem = !audioOnly && !isLiveStream && (audioTracks <= 1 || ijkUnsupported)
         Log.i(
             TAG,
-            "route uri=$uri audioTracks=$audioTracks mime=$audioMime ijkDecode=$ijkCanDecode " +
+            "route uri=$uri audioTracks=$audioTracks mime=$audioMime ijkUnsupported=$ijkUnsupported " +
                 "audioOnly=$audioOnly preferSystem=$preferSystem",
         )
         if (preferSystem && prepareSystem(uri)) return
@@ -294,10 +294,17 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         }
     }.getOrDefault(-1 to "")
 
-    /** 精简版 IJK 的 FFmpeg 只编了 MP1/MP2/MP3/AAC 解码器，其余（Vorbis/FLAC/AC3/Opus）必须交给系统播放器。 */
-    private fun ijkCanDecodeAudio(mime: String): Boolean {
+    /**
+     * 精简版 IJK 的 FFmpeg 只编了 MP1/MP2/MP3/AAC 解码器，其余（Vorbis/FLAC/AC3/Opus/DTS/WMA）必须交给系统播放器。
+     * 采用「明确不支持才走系统」的反向判断：MIME 为空（部分 ROM 对 MP2/MKV 返回空或不规范）时交给 IJK，
+     * 避免把 MP2 双轨误判给系统播放器（系统播放器路径不支持切轨，且部分机型播 MP2-MKV 无声）。
+     */
+    private fun ijkCannotDecodeAudio(mime: String): Boolean {
         val m = mime.lowercase()
-        return m == "audio/mpeg" || m == "audio/mp4a-latm" || m == "audio/aac" || m.contains("mp3")
+        if (m.isBlank()) return false
+        if (m.contains("vorbis") || m.contains("flac") || m.contains("opus")) return true
+        if (m.contains("ac3") || m.contains("eac3") || m.contains("dts") || m.contains("wma")) return true
+        return false
     }
 
     /** 本地媒体文件扩展名（系统 MediaPlayer 在 4.4 上原生支持这些容器）。 */
