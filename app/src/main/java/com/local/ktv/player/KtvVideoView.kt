@@ -240,13 +240,15 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         //  · audioOnly 伴唱引擎 → 强制 IJK（只解音频）
         //  · 直播 → IJK
         val (audioTracks, audioMime) = if (isLiveStream) 0 to "" else probeAudioInfo(uri)
-        // 单音轨、或音频编码 IJK 解不了（Vorbis/FLAC/AC3/Opus…）→ 系统 MediaPlayer；
-        // 多音轨且 IJK 能解（MP2/MP3/AAC）→ IJK（切原唱/伴唱稳定）。
-        val ijkUnsupported = ijkCannotDecodeAudio(audioMime)
-        val preferSystem = !audioOnly && !isLiveStream && (audioTracks <= 1 || ijkUnsupported)
+        // 路由策略（v2.3.8，配完整版 IJK）：
+        //  · 单音轨本地文件 → 系统 MediaPlayer（路径短、稳，无需切轨）
+        //  · 多音轨本地文件（KTV 原唱/伴唱）→ IJK（完整版 FFmpeg 已含 Vorbis/FLAC/AC3/Opus，切轨稳定）
+        //  · 直播 / audioOnly 伴唱引擎 → IJK
+        // IJK 准备失败时会自动降级到系统播放器（见下方重试分支）。
+        val preferSystem = !audioOnly && !isLiveStream && audioTracks <= 1
         Log.i(
             TAG,
-            "route uri=$uri audioTracks=$audioTracks mime=$audioMime ijkUnsupported=$ijkUnsupported " +
+            "route uri=$uri audioTracks=$audioTracks mime=$audioMime " +
                 "audioOnly=$audioOnly preferSystem=$preferSystem",
         )
         if (preferSystem && prepareSystem(uri)) return
@@ -264,6 +266,11 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
             val second = retry?.let { runCatching { prepare(it, uri) } }
             if (second == null || second.isFailure) {
                 prepared = false
+                // IJK 完全不可用（如完整版 so 加载失败/编码不支持）时降级到系统播放器。
+                if (!audioOnly && !isLiveStream && audioTracks >= 1 && prepareSystem(uri)) {
+                    Log.w(TAG, "IJK unavailable; fell back to system player")
+                    return
+                }
                 errorListener?.onError(null, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0)
             }
         }
@@ -293,19 +300,6 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
             runCatching { extractor.release() }
         }
     }.getOrDefault(-1 to "")
-
-    /**
-     * 精简版 IJK 的 FFmpeg 只编了 MP1/MP2/MP3/AAC 解码器，其余（Vorbis/FLAC/AC3/Opus/DTS/WMA）必须交给系统播放器。
-     * 采用「明确不支持才走系统」的反向判断：MIME 为空（部分 ROM 对 MP2/MKV 返回空或不规范）时交给 IJK，
-     * 避免把 MP2 双轨误判给系统播放器（系统播放器路径不支持切轨，且部分机型播 MP2-MKV 无声）。
-     */
-    private fun ijkCannotDecodeAudio(mime: String): Boolean {
-        val m = mime.lowercase()
-        if (m.isBlank()) return false
-        if (m.contains("vorbis") || m.contains("flac") || m.contains("opus")) return true
-        if (m.contains("ac3") || m.contains("eac3") || m.contains("dts") || m.contains("wma")) return true
-        return false
-    }
 
     /** 本地媒体文件扩展名（系统 MediaPlayer 在 4.4 上原生支持这些容器）。 */
     private fun isLocalMedia(uri: Uri): Boolean {
