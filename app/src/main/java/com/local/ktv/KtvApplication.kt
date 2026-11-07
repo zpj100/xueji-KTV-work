@@ -15,13 +15,14 @@ class KtvApplication : Application() {
         super.onCreate()
         installCrashLogger()
         instanceRef = this
-        PersonalMediaStore.init(this)
-        CatalogAssets.init(this)
-        // 4.x 上若账号存储/加密不可用，不应阻塞启动。
-        runCatching { IgebaAccount.initialize(this) }.onFailure {
-            Log.w(TAG, "i歌霸账号存储初始化失败，已跳过", it)
-        }
-        Log.i(TAG, "KTV application initialized without native services")
+        // 4.x 上各项初始化若失败，不应阻塞启动（崩溃日志已落盘，便于排查）。
+        runCatching { PersonalMediaStore.init(this) }
+            .onFailure { Log.w(TAG, "个人媒体存储初始化失败，已跳过", it) }
+        runCatching { CatalogAssets.init(this) }
+            .onFailure { Log.w(TAG, "目录资源初始化失败，已跳过", it) }
+        runCatching { IgebaAccount.initialize(this) }
+            .onFailure { Log.w(TAG, "i歌霸账号存储初始化失败，已跳过", it) }
+        Log.i(TAG, "KTV application initialized (sdk=${Build.VERSION.SDK_INT})")
     }
 
     /** 崩溃日志落盘，便于 4.x 无 logcat 时排查。 */

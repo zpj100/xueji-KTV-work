@@ -8,10 +8,6 @@ import android.os.Build
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
-import org.vosk.LibVosk
-import org.vosk.LogLevel
-import org.vosk.Model
-import org.vosk.Recognizer
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
@@ -19,13 +15,20 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.util.zip.ZipInputStream
 
+/**
+ * 离线语音（vosk）。
+ *
+ * 关键：所有 org.vosk.* 类型都被隔离在 [VoskBridge] 内部，OfflineVoice 本身
+ * 不引用任何 vosk 类型。这样在 Android 4.x（API < 21）上，vosk 的类和原生库
+ * 永远不会被加载/初始化，避免 UnsatisfiedLinkError 导致启动闪退。
+ */
 class OfflineVoice(context: Context) {
     fun interface Callback {
         fun onText(text: String)
     }
 
     private val context = context.applicationContext
-    private var model: Model? = null
+    private var model: Any? = null
     @Volatile private var listenRunning = false
     private var listenThread: Thread? = null
     @Volatile private var grammarJson: String? = null
@@ -55,10 +58,10 @@ class OfflineVoice(context: Context) {
         }
         if (model != null) return true
         return try {
-            LibVosk.setLogLevel(LogLevel.WARNINGS)
+            VoskBridge.setLogLevelWarnings()
             val dir = File(context.filesDir, MODEL_NAME)
             if (!File(dir, READY_MARK).isFile) unpack(dir)
-            model = Model(dir.absolutePath)
+            model = VoskBridge.loadModel(dir.absolutePath)
             true
         } catch (t: Throwable) {
             Log.w(TAG, "离线语音不可用: $t")
@@ -71,7 +74,7 @@ class OfflineVoice(context: Context) {
         if (model == null || listenRunning) return
         listenRunning = true
         listenThread = Thread({
-            var recognizer: Recognizer? = null
+            var recognizer: Any? = null
             var recorder: AudioRecord? = null
             var ver = -1
             try {
@@ -80,15 +83,15 @@ class OfflineVoice(context: Context) {
                 recorder.startRecording()
                 while (listenRunning) {
                     if (recognizer == null || ver != grammarVer) {
-                        recognizer?.runCatching { close() }
+                        VoskBridge.closeRecognizer(recognizer)
                         ver = grammarVer
                         recognizer = makeRecognizer()
                     }
                     val n = recorder.read(buf, 0, buf.size)
                     if (n <= 0) continue
-                    val uttered = recognizer?.acceptWaveForm(buf, n) == true
+                    val uttered = VoskBridge.acceptWaveForm(recognizer, buf, n)
                     if (!uttered) continue
-                    val text = parseText(recognizer?.result, true)
+                    val text = parseText(VoskBridge.getResult(recognizer), true)
                     if (text.isNotEmpty()) cb?.onText(text)
                 }
             } catch (t: Throwable) {
@@ -96,7 +99,7 @@ class OfflineVoice(context: Context) {
             } finally {
                 recorder?.runCatching { stop() }
                 recorder?.runCatching { release() }
-                recognizer?.runCatching { close() }
+                VoskBridge.closeRecognizer(recognizer)
             }
         }, "ktv-listen")
         listenThread?.start()
@@ -109,16 +112,16 @@ class OfflineVoice(context: Context) {
         t?.runCatching { join(800) }
     }
 
-    private fun makeRecognizer(): Recognizer {
+    private fun makeRecognizer(): Any? {
         val g = grammarJson
         if (g != null && g.length > 8) {
             try {
-                return Recognizer(model, SAMPLE_RATE.toFloat(), g)
+                return VoskBridge.createRecognizer(model, SAMPLE_RATE, g)
             } catch (t: Throwable) {
                 Log.w(TAG, "grammar 不可用，改自由听写: $t")
             }
         }
-        return Recognizer(model, SAMPLE_RATE.toFloat())
+        return VoskBridge.createRecognizer(model, SAMPLE_RATE, null)
     }
 
     private fun openRecorder(): AudioRecord {
@@ -140,7 +143,7 @@ class OfflineVoice(context: Context) {
 
     fun close() {
         stopListen()
-        model?.runCatching { close() }
+        VoskBridge.closeModel(model)
         model = null
     }
 
@@ -203,5 +206,35 @@ class OfflineVoice(context: Context) {
         } catch (_: Exception) {
             ""
         }
+    }
+
+    /**
+     * vosk 桥接层。所有 org.vosk.* 引用都集中在此对象内，
+     * 仅在 prepare() 通过 SDK 检查后才会被加载。
+     */
+    private object VoskBridge {
+        fun setLogLevelWarnings() {
+            org.vosk.LibVosk.setLogLevel(org.vosk.LogLevel.WARNINGS)
+        }
+
+        fun loadModel(path: String): Any = org.vosk.Model(path)
+
+        fun closeModel(model: Any?) {
+            (model as? org.vosk.Model)?.runCatching { close() }
+        }
+
+        fun createRecognizer(model: Any?, sampleRate: Int, grammar: String?): Any? =
+            if (grammar != null) org.vosk.Recognizer(model as org.vosk.Model, sampleRate.toFloat(), grammar)
+            else org.vosk.Recognizer(model as org.vosk.Model, sampleRate.toFloat())
+
+        fun closeRecognizer(recognizer: Any?) {
+            (recognizer as? org.vosk.Recognizer)?.runCatching { close() }
+        }
+
+        fun acceptWaveForm(recognizer: Any?, buf: ByteArray, n: Int): Boolean =
+            (recognizer as? org.vosk.Recognizer)?.acceptWaveForm(buf, n) == true
+
+        fun getResult(recognizer: Any?): String? =
+            (recognizer as? org.vosk.Recognizer)?.result
     }
 }
