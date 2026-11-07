@@ -11,6 +11,16 @@ import java.util.Locale
 class KtvApplication : Application() {
     private var defaultCrashHandler: Thread.UncaughtExceptionHandler? = null
 
+    /**
+     * Android 4.x（API < 21）需要手动安装 multidex：
+     * 启用 core library desugaring 后脱糖库会落在 classes2.dex，未安装会导致启动时
+     * NoClassDefFoundError。API 21+ 由系统原生支持，install 为空操作。
+     */
+    override fun attachBaseContext(base: android.content.Context) {
+        super.attachBaseContext(base)
+        runCatching { androidx.multidex.MultiDex.install(this) }
+    }
+
     override fun onCreate() {
         super.onCreate()
         installCrashLogger()

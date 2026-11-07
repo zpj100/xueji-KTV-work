@@ -16,3 +16,10 @@
 -keep class tv.danmaku.ijk.media.player.misc.** { *; }
 -keepclasseswithmembernames class * { native <methods>; }
 -dontwarn tv.danmaku.ijk.**
+
+# 保留注解、泛型签名与内部类信息（部分库在运行期读取，缺失可能导致 4.x 上的初始化异常）
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+
+# Android 4.x 多 dex 支持：MultiDex 通过 ClassLoader 反射加载 classes2.dex，保留其入口
+-keep class androidx.multidex.** { *; }
+-dontwarn androidx.multidex.**
