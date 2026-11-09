@@ -23,3 +23,10 @@
 # Android 4.x 多 dex 支持：MultiDex 通过 ClassLoader 反射加载 classes2.dex，保留其入口
 -keep class androidx.multidex.** { *; }
 -dontwarn androidx.multidex.**
+
+# 4.4 兼容：这些类里引用了 API 21+ 的 android.net.* 类型。
+# 必须保持独立类且禁止 R8 内联/合并，否则类型引用会被合并进 MainActivity，
+# 在 Android 4.4 的 Dalvik 校验阶段触发 NoClassDefFoundError/VerifyError。
+-keep class com.local.ktv.LanAddressResolver { *; }
+-keep class com.local.ktv.LanAddressResolverApi21 { *; }
+-keep class com.local.ktv.ViewOutlineCompat { *; }

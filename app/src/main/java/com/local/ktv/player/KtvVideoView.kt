@@ -68,8 +68,8 @@ class KtvVideoView @JvmOverloads constructor(
     val currentPosition: Int get() = engine?.currentPosition ?: 0
     val duration: Int get() = engine?.duration ?: 0
 
-    internal fun updateVideoSize(width: Int, height: Int) {
-        surfaceView.setVideoSize(width, height)
+    internal fun updateVideoSize(width: Int, height: Int, sarNum: Int = 0, sarDen: Int = 0) {
+        surfaceView.setVideoSize(width, height, sarNum, sarDen)
     }
 
     internal fun installSurfaceCallback(callback: SurfaceHolder.Callback) {
@@ -94,10 +94,14 @@ class KtvVideoView @JvmOverloads constructor(
 private class KtvSurfaceView(context: Context) : SurfaceView(context) {
     private var videoWidth = 0
     private var videoHeight = 0
+    private var sarNum = 0
+    private var sarDen = 0
 
-    fun setVideoSize(width: Int, height: Int) {
+    fun setVideoSize(width: Int, height: Int, sarNum: Int = 0, sarDen: Int = 0) {
         videoWidth = width
         videoHeight = height
+        this.sarNum = sarNum
+        this.sarDen = sarDen
         if (width > 0 && height > 0) holder.setFixedSize(width, height)
         requestLayout()
     }
@@ -105,11 +109,20 @@ private class KtvSurfaceView(context: Context) : SurfaceView(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val maxWidth = getDefaultSize(videoWidth, widthMeasureSpec).coerceAtLeast(1)
         val maxHeight = getDefaultSize(videoHeight, heightMeasureSpec).coerceAtLeast(1)
+        // 按视频显示宽高比（含 sample aspect ratio）等比缩放，4:3 老 MV 不再被横向拉伸。
+        var aspect = 16f / 9f
+        if (videoWidth > 0 && videoHeight > 0) {
+            aspect = if (sarNum > 0 && sarDen > 0) {
+                videoWidth.toFloat() * sarNum / (videoHeight.toFloat() * sarDen)
+            } else {
+                videoWidth.toFloat() / videoHeight
+            }
+        }
         var measuredWidth = maxWidth
-        var measuredHeight = measuredWidth * 9 / 16
+        var measuredHeight = (measuredWidth / aspect).toInt()
         if (measuredHeight > maxHeight) {
             measuredHeight = maxHeight
-            measuredWidth = measuredHeight * 16 / 9
+            measuredWidth = (measuredHeight * aspect).toInt()
         }
         setMeasuredDimension(measuredWidth.coerceAtLeast(1), measuredHeight.coerceAtLeast(1))
     }
@@ -153,6 +166,8 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
     private var recoveryListener: ((Boolean) -> Unit)? = null
     private var videoWidth = 0
     private var videoHeight = 0
+    private var videoSarNum = 0
+    private var videoSarDen = 0
     private var toneStep = 0
     private var lastUri: Uri? = null
 
@@ -204,7 +219,7 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
         targetView = view
         view.bind(this)
         view.keepScreenOn = true
-        view.updateVideoSize(videoWidth, videoHeight)
+        view.updateVideoSize(videoWidth, videoHeight, videoSarNum, videoSarDen)
         view.installSurfaceCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 if (targetView !== view || released) return
@@ -323,7 +338,9 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
             prepared = true
             videoWidth = mp.videoWidth
             videoHeight = mp.videoHeight
-            targetView?.updateVideoSize(videoWidth, videoHeight)
+            videoSarNum = 0
+            videoSarDen = 0
+            targetView?.updateVideoSize(videoWidth, videoHeight, videoSarNum, videoSarDen)
             preparedListener?.onPrepared(null)
             if (startWhenPrepared && !mp.isPlaying) runCatching { mp.start() }
         }
@@ -531,9 +548,9 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
             player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 1_048_576L)
         }
         val useMediaCodec = decoderMode == PlaybackDecoderMode.SYSTEM
-        // 音频硬解回退：本版 FFmpeg 只编了 AAC/MP3 软解器，缺 Vorbis/FLAC/AC3/Opus；
-        // 开启 MediaCodec 让系统硬解 MKV 的 Vorbis 等音轨，视频仍走 FFmpeg 软解以保持 4.4 稳定。
-        val audioMediaCodec = true
+        // 音频统一走 FFmpeg 软解：完整版 libijkffmpeg 已含 AAC/MP3/MP2/Vorbis/FLAC/AC3/Opus 解码器，
+        // Android 4.4 的 MediaCodec 缺少 MP2/Vorbis 且行为不稳定，关闭音频硬解可避免无声或爆音。
+        val audioMediaCodec = false
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", if (useMediaCodec || audioMediaCodec) 1L else 0L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-all-videos", if (useMediaCodec) 1L else 0L)
         player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-avc", if (useMediaCodec) 1L else 0L)
@@ -549,7 +566,9 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
             prepared = true
             videoWidth = mp.videoWidth
             videoHeight = mp.videoHeight
-            targetView?.updateVideoSize(videoWidth, videoHeight)
+            videoSarNum = mp.videoSarNum
+            videoSarDen = mp.videoSarDen
+            targetView?.updateVideoSize(videoWidth, videoHeight, videoSarNum, videoSarDen)
             // 多音轨 MKV（原唱/伴唱双 Vorbis）：默认锁定第一条音轨，避免 IJK 未选轨导致无声。
             runCatching {
                 val audio = ijkPlayer?.trackInfo?.indices?.filter {
@@ -563,10 +582,12 @@ class KtvPlaybackEngine(context: Context, private val audioOnly: Boolean = false
             preparedListener?.onPrepared(null)
             if (startWhenPrepared && !mp.isPlaying) runCatching { mp.start() }
         }
-        player.setOnVideoSizeChangedListener { _, width, height, _, _ ->
+        player.setOnVideoSizeChangedListener { _, width, height, sarNum, sarDen ->
             videoWidth = width
             videoHeight = height
-            targetView?.updateVideoSize(width, height)
+            videoSarNum = sarNum
+            videoSarDen = sarDen
+            targetView?.updateVideoSize(width, height, sarNum, sarDen)
         }
         player.setOnCompletionListener { completionListener?.onCompletion(null) }
         player.setOnErrorListener { _, what, extra ->

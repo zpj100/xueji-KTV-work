@@ -50,6 +50,37 @@ internal object LanAddressSelector {
 }
 
 internal object LanAddressResolver {
+    /** 仅使用 java.net 的兜底实现，Android 4.4 也可以安全加载。 */
+    fun resolve(): String? {
+        // Some TV firmware omits network capabilities. Only fall back to physical LAN interfaces.
+        val fallback = mutableListOf<LanAddressSelector.Candidate>()
+        runCatching {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                val network = interfaces.nextElement()
+                runCatching {
+                    if (network.isUp && !network.isLoopback &&
+                        LanAddressSelector.isFallbackLanInterface(network.name)) {
+                        val addresses = network.inetAddresses
+                        while (addresses.hasMoreElements()) {
+                            val address = addresses.nextElement()
+                            if (address is Inet4Address) {
+                                fallback += LanAddressSelector.Candidate(network.name, address.hostAddress.orEmpty())
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return LanAddressSelector.select(fallback)
+    }
+}
+
+/**
+ * API 21+ 才加载：ConnectivityManager 能准确排除 Wi-Fi Direct / VPN 网卡。
+ * 单独成类是为了让 Android 4.4 上永远不会加载这里引用的 android.net.* 新类。
+ */
+internal object LanAddressResolverApi21 {
     fun resolve(context: Context): String? {
         val candidates = mutableListOf<LanAddressSelector.Candidate>()
         val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -72,27 +103,6 @@ internal object LanAddressResolver {
                 }
             }
         }
-        LanAddressSelector.select(candidates)?.let { return it }
-        // Some TV firmware omits network capabilities. Only fall back to physical LAN interfaces.
-        val fallback = mutableListOf<LanAddressSelector.Candidate>()
-        runCatching {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
-            while (interfaces != null && interfaces.hasMoreElements()) {
-                val network = interfaces.nextElement()
-                runCatching {
-                    if (network.isUp && !network.isLoopback &&
-                        LanAddressSelector.isFallbackLanInterface(network.name)) {
-                        val addresses = network.inetAddresses
-                        while (addresses.hasMoreElements()) {
-                            val address = addresses.nextElement()
-                            if (address is Inet4Address) {
-                                fallback += LanAddressSelector.Candidate(network.name, address.hostAddress.orEmpty())
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return LanAddressSelector.select(fallback)
+        return LanAddressSelector.select(candidates) ?: LanAddressResolver.resolve()
     }
 }

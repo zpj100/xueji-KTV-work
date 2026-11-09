@@ -62,7 +62,10 @@ import android.widget.TextView
 import android.widget.TextView.OnEditorActionListener
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.content.res.AppCompatResources
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.widget.ImageViewCompat
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.local.ktv.KtvStore.Companion.stableId
@@ -2520,7 +2523,7 @@ class MainActivity : AppCompatActivity() {
         }
         fun renderMuteButton() {
             mute.text = if (musicVolume == 0) "放音" else "静音"
-            val drawable = getDrawable(
+            val drawable = ContextCompat.getDrawable(this@MainActivity,
                 if (musicVolume == 0) R.drawable.ic_ctrl_sound_enable
                 else R.drawable.ic_ctrl_sound_disable
             )
@@ -3727,7 +3730,9 @@ class MainActivity : AppCompatActivity() {
         return "http://$host:${remoteServer.port()}/mobile"
     }
 
-    private fun localIp(): String = LanAddressResolver.resolve(this).orEmpty()
+    private fun localIp(): String =
+        if (Build.VERSION.SDK_INT >= 21) LanAddressResolverApi21.resolve(this).orEmpty()
+        else LanAddressResolver.resolve().orEmpty()
 
     private fun showScoreDialog() {
         val box = LinearLayout(this)
@@ -5556,7 +5561,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundResource(R.drawable.bg_song_action_focus)
             addView(ImageView(this@MainActivity).apply {
                 setImageResource(iconRes)
-                iconTint?.let { imageTintList = ColorStateList.valueOf(it) }
+                iconTint?.let { ImageViewCompat.setImageTintList(this, ColorStateList.valueOf(it)) }
                 setPadding(dp(18), dp(18), dp(18), dp(18))
                 setBackgroundCompat(GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
@@ -6509,7 +6514,7 @@ class MainActivity : AppCompatActivity() {
             homeCardFavorite, homeCardCategory, homeCardLive,
         ).forEach(::installPressFeedback)
         listOfNotNull(homePlayerHost, subPagePlayerHost, homePoster).forEach(TvFocusStyler::preserveBackground)
-        (homePoster as? FrameLayout)?.foreground = getDrawable(R.drawable.bg_player_focus)
+        (homePoster as? FrameLayout)?.foreground = ContextCompat.getDrawable(this, R.drawable.bg_player_focus)
         configureTvFocusNavigation()
         prepareTvFocusableTree(window.decorView)
 
@@ -7562,7 +7567,7 @@ class MainActivity : AppCompatActivity() {
                     if (index == currentCategoryIndex) R.drawable.ott_bg_rank_item_selected
                     else R.drawable.ott_bg_rank_item_not_selected
                 )
-                val trophy = getDrawable(R.drawable.ic_default_rank_avatar)?.mutate()
+                val trophy = ContextCompat.getDrawable(this@MainActivity, R.drawable.ic_default_rank_avatar)?.mutate()
                 trophy?.setBounds(0, 0, dp(42), dp(42))
                 setCompoundDrawables(null, trophy, null, null)
                 compoundDrawablePadding = dp(1)
@@ -8488,7 +8493,9 @@ class MainActivity : AppCompatActivity() {
                     setImageResource(R.drawable.ktv_logo)
                     scaleType = ImageView.ScaleType.CENTER_INSIDE
                 }, LinearLayout.LayoutParams(dp(112), dp(112)))
-                addView(ProgressBar(this@MainActivity, null, 0, R.style.LoadingProgressBar), LinearLayout.LayoutParams(dp(54), dp(54)).apply {
+                addView(ProgressBar(this@MainActivity).apply {
+                    indeterminateDrawable = AppCompatResources.getDrawable(this@MainActivity, R.anim.loading_anim)
+                }, LinearLayout.LayoutParams(dp(54), dp(54)).apply {
                     topMargin = dp(22)
                 })
                 databaseLoadingText = TextView(this@MainActivity).apply {
@@ -8500,7 +8507,7 @@ class MainActivity : AppCompatActivity() {
                 addView(databaseLoadingText, LinearLayout.LayoutParams(dp(620), -2))
                 databaseLoadingProgress = ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
                     max = 100
-                    progressDrawable = getDrawable(R.drawable.bg_download_progress)
+                    progressDrawable = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_download_progress)
                 }
                 addView(databaseLoadingProgress, LinearLayout.LayoutParams(dp(620), dp(10)))
                 databaseRetryButton = TextView(this@MainActivity).apply {
