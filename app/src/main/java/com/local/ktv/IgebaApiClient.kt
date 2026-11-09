@@ -34,7 +34,7 @@ object IgebaApiClient {
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
             IgebaAccount.attach(connection)
             connection.outputStream.use { it.write(body) }
-            if (connection.responseCode !in 200..299) throw IOException("目录接口 HTTP ${connection.responseCode}")
+            if (connection.responseCode !in 200..299) throw httpError(connection, address)
             IgebaAccount.receive(connection)
             val result = JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
             if (result.has("Result") && result.optInt("Result") < 0) {
@@ -42,6 +42,25 @@ object IgebaApiClient {
             }
             return result
         } finally { connection.disconnect() }
+    }
+
+    /**
+     * 把非 2xx 响应转成可诊断的异常。
+     * 账号服务对未登录/会话失效的地址请求返回 403，原来的“目录接口 HTTP 403”提示会误导用户。
+     */
+    private fun httpError(connection: HttpURLConnection, address: Boolean): IOException {
+        val code = connection.responseCode
+        val detail = runCatching {
+            connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }?.trim()?.take(120)
+        }.getOrNull().orEmpty()
+        val hint = when {
+            code != 403 && code != 401 -> ""
+            !address -> "：曲库接口已关闭或需要登录"
+            IgebaAccount.session == null -> "：i歌霸账号未登录，请先在设置中登录账号"
+            else -> "：账号会话已失效或该曲目无下载权限，请重新登录后再试"
+        }
+        return IOException((if (address) "歌曲地址接口" else "目录接口") + " HTTP $code" + hint +
+            if (detail.isNotEmpty()) "（服务端：$detail）" else "")
     }
 
     data class MediaAddress(val songNumber: String, val url: String, val voiceChannel: Int,

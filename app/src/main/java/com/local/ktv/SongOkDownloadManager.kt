@@ -404,7 +404,17 @@ object SongOkDownloadManager {
         val attemptStopped = AtomicBoolean(false)
         synchronized(job) { job.inFlight.clear() }
         val userId = IgebaApiClient.userId()
-        var address=IgebaApiClient.address(number)
+        // 会话失效时服务端对地址接口直接返回 403：先自动恢复登录一次，避免整批下载被跳过。
+        var address = try {
+            IgebaApiClient.address(number)
+        } catch (error: IOException) {
+            val session = IgebaAccount.session
+            if (error.message?.contains("HTTP 403") != true || session == null ||
+                !IgebaAccount.automaticLoginEnabled) throw error
+            IgebaAccount.relogin(session)
+            android.util.Log.i("SongOkDownload", "地址接口 403，已恢复账号登录后重试，歌曲=$number")
+            IgebaApiClient.address(number)
+        }
         val addressLock = Any()
         var addressRefreshes=0
         var exclusive=false
@@ -421,10 +431,16 @@ object SongOkDownloadManager {
             return result
         }
         fun refresh(error: MediaHttpException) {
-            if(error.code != 403 || !error.detail.contains("expired",true) || addressRefreshes >= 2) throw error
+            if(error.code != 403 || !error.detail.contains("expired",true) || addressRefreshes >= 3) throw error
             if(job.cancelled.get()) throw IOException("下载已暂停")
             addressRefreshes++
-            if (addressRefreshes == 1) {
+            // 第三次仍然过期说明会话本身已失效，用保存的账号密码自动恢复登录。
+            if (addressRefreshes == 3) {
+                val session = IgebaAccount.session ?: throw IOException("账号已退出，请重新登录后再下载")
+                IgebaAccount.relogin(session)
+                android.util.Log.i("SongOkDownload", "已恢复当前账号登录，重新获取歌曲地址")
+            }
+            if (addressRefreshes == 1 || addressRefreshes == 3) {
                 val snapshot = java.util.concurrent.FutureTask {
                     orderSnapshot?.invoke().orEmpty()
                         .filter { it.matches(Regex("\\d{1,16}")) }.toMutableList()
@@ -436,7 +452,7 @@ object SongOkDownloadManager {
                     .put("UserId", userId).put("Action", 1)
                     .put("SongNumbers", number).put("Orders", orders.joinToString(",")), true)
             }
-            android.util.Log.i("SongOkDownload", "过期地址刷新，歌曲=$number 次数=$addressRefreshes/2")
+            android.util.Log.i("SongOkDownload", "过期地址刷新，歌曲=$number 次数=$addressRefreshes/3")
             address=IgebaApiClient.address(number)
         }
         fun retryExpired(request: () -> Block): Block {

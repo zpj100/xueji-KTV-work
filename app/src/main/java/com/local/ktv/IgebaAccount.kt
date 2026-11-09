@@ -24,12 +24,27 @@ internal object IgebaAccount {
 
     private var vault: IgebaSessionVault? = null
 
+    /** 仅在用户显式勾选“允许自动恢复登录”后才保存的账号密码。 */
+    private data class Credentials(val account: String, val password: String)
+
+    private var credentials: Credentials? = null
+    private val reloginLock = Any()
+    private var lastReloginAttempt = 0L
+
+    /** 是否保存了可用于下载失败时自动恢复登录的账号密码。 */
+    val automaticLoginEnabled: Boolean get() = synchronized(this) { credentials != null }
+
     @Synchronized fun initialize(context: android.content.Context) {
         if (vault != null) return
         val storage = IgebaSessionVault(context)
         vault = storage
         runCatching {
             val saved = storage.load() ?: return@runCatching
+            val account = saved.optString("account")
+            val password = saved.optString("password")
+            if (account.isNotEmpty() && password.isNotEmpty()) {
+                credentials = Credentials(account, password)
+            }
             val restored = Session(saved.getLong("userId"), saved.getString("nickname"))
             require(restored.userId > 0)
             val jar = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER)
@@ -57,7 +72,8 @@ internal object IgebaAccount {
         }
     }
 
-    private fun persist(value: Session, jar: CookieManager) {
+    private fun persist(value: Session, jar: CookieManager,
+                        savedCredentials: Credentials? = credentials) {
         val entries = org.json.JSONArray()
         for (uri in jar.cookieStore.urIs) {
             if (uri.host != "app.ige8.net") continue
@@ -69,12 +85,16 @@ internal object IgebaAccount {
                     .put("expires", if (cookie.maxAge < 0) -1L else System.currentTimeMillis() + cookie.maxAge.coerceAtMost(315360000L) * 1000))
             }
         }
-        vault?.save(JSONObject().put("userId", value.userId).put("nickname", value.nickname).put("cookies", entries))
+        val payload = JSONObject().put("userId", value.userId).put("nickname", value.nickname)
+            .put("cookies", entries)
+        savedCredentials?.let { payload.put("account", it.account).put("password", it.password) }
+        vault?.save(payload)
     }
 
     @Synchronized fun logout() {
         generation++
         session = null
+        credentials = null
         cookies = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER)
         vault?.clear()
     }
@@ -119,23 +139,61 @@ internal object IgebaAccount {
         } finally { connection.disconnect() }
     }
 
-    fun login(account: String, password: String): Session {
+    fun login(account: String, password: String, remember: Boolean = false): Session {
         require(account.isNotBlank() && password.isNotEmpty()) { "请输入账号和密码" }
         val epoch = synchronized(this) { generation }
         val jar = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER)
+        val value = authenticate(account, password, jar)
+        val savedCredentials = if (remember) Credentials(account.trim(), password) else null
+        synchronized(this) {
+            check(epoch == generation) { "本次登录已取消" }
+            persist(value, jar, savedCredentials)
+            session = value
+            cookies = jar
+            credentials = savedCredentials
+        }
+        return value
+    }
+
+    private fun authenticate(account: String, password: String, jar: CookieManager): Session {
         val params = JSONObject().put("UserName", account.trim()).put("Password", password)
             .put("ExeInfos", JSONObject().put("MaidongKTV", BuildConfig.VERSION_NAME).toString())
             .put("EnvInfos", JSONObject().put("Os", "Android ${Build.VERSION.RELEASE}").toString())
             .put("PlayerInfos", JSONObject().toString()).put("ReferId", 0)
         val result = request(IgebaApiClient.ADDRESS_URL, "10.0", "DO_LOGIN", params, jar)
-        val value = parseSession(result)
+        return parseSession(result)
+    }
+
+    /**
+     * 会话被服务方判定失效后，用保存的账号密码自动恢复登录。
+     * 同一时间只允许一次恢复；失败时保留原会话，由调用方提示用户手动登录。
+     */
+    fun relogin(expected: Session): Session = synchronized(reloginLock) recovery@ {
+        val saved: Credentials
+        val epoch: Int
         synchronized(this) {
-            check(epoch == generation) { "本次登录已取消" }
-            persist(value, jar)
-            session = value
-            cookies = jar
+            val current = session ?: throw IOException("账号已退出，请重新登录")
+            check(current.userId == expected.userId) { "账号已切换，请重试下载" }
+            if (current !== expected) return@recovery current
+            saved = credentials ?: throw IOException("会话已失效，请重新登录并勾选“允许自动恢复登录”")
+            val now = System.nanoTime()
+            check(lastReloginAttempt == 0L || now - lastReloginAttempt >= 60_000_000_000L) {
+                "账号恢复请求过于频繁，请稍后重试"
+            }
+            lastReloginAttempt = now
+            epoch = generation
         }
-        return value
+        val jar = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER)
+        val value = authenticate(saved.account, saved.password, jar)
+        check(value.userId == expected.userId) { "恢复登录返回的账号不一致" }
+        synchronized(this) {
+            check(epoch == generation && session === expected) { "账号已变更，本次恢复已取消" }
+            persist(value, jar)
+            cookies = jar
+            session = value
+            generation++
+        }
+        value
     }
 
     internal fun parseSession(result: JSONObject): Session {
