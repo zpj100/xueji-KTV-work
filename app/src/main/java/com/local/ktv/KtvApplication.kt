@@ -23,6 +23,7 @@ class KtvApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        skipAppCompatVectorCheck()
         installCrashLogger()
         instanceRef = this
         // 4.x 上各项初始化若失败，不应阻塞启动（崩溃日志已落盘，便于排查）。
@@ -33,6 +34,27 @@ class KtvApplication : Application() {
         runCatching { IgebaAccount.initialize(this) }
             .onFailure { Log.w(TAG, "i歌霸账号存储初始化失败，已跳过", it) }
         Log.i(TAG, "KTV application initialized (sdk=${Build.VERSION.SDK_INT})")
+    }
+
+    /**
+     * 跳过 AppCompat 的矢量图配置自检（仅 4.x）。
+     *
+     * 本项目 minSdk 14，AGP 会把 res/drawable 下的 vector 光栅化成各密度 PNG 供 4.x 使用，
+     * 因此 AppCompat 拿 abc_vector_test 自检时得到的是 BitmapDrawable 而不是
+     * VectorDrawableCompat，启动阶段会抛
+     * "This app has been built with an incorrect configuration..." 导致闪退。
+     * 光栅化 PNG 在 4.x 上绘制完全正常，这里直接标记自检已通过即可。
+     */
+    private fun skipAppCompatVectorCheck() {
+        if (Build.VERSION.SDK_INT >= 21) return
+        runCatching {
+            val cls = Class.forName("androidx.appcompat.widget.ResourceManagerInternal")
+            val instance = cls.getDeclaredMethod("get").invoke(null) ?: return@runCatching
+            cls.getDeclaredField("mHasCheckedVectorDrawableSetup").apply {
+                isAccessible = true
+                setBoolean(instance, true)
+            }
+        }.onFailure { Log.w(TAG, "跳过 AppCompat 矢量图自检失败", it) }
     }
 
     /** 崩溃日志落盘，便于 4.x 无 logcat 时排查。 */

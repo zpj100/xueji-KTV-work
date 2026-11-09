@@ -30,3 +30,8 @@
 -keep class com.local.ktv.LanAddressResolver { *; }
 -keep class com.local.ktv.LanAddressResolverApi21 { *; }
 -keep class com.local.ktv.ViewOutlineCompat { *; }
+
+# 4.4 兼容：KtvApplication 用反射跳过 AppCompat 的矢量图自检
+# （minSdk<21 时 vector 被光栅化为 PNG，自检必然失败并抛 IllegalStateException）。
+# 必须保留类名、get() 与 mHasCheckedVectorDrawableSetup 字段名。
+-keep class androidx.appcompat.widget.ResourceManagerInternal { *; }
