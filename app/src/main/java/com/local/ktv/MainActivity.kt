@@ -2344,8 +2344,10 @@ class MainActivity : AppCompatActivity() {
         progressRow.setBackgroundColor(Color.argb(155, 0, 0, 0))
 
         fullScreenSeekBar = SeekBar(this).apply {
+            id = View.generateViewId()
             max = 1
             isFocusable = true
+            isFocusableInTouchMode = true
             setOnSeekBarChangeListener(object : OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (fromUser) {
@@ -2369,6 +2371,28 @@ class MainActivity : AppCompatActivity() {
                     persistRuntimeState()
                 }
             })
+            // 电视遥控器：进度条获得焦点后，方向键左右直接跳转播放位置。
+            // 原生 SeekBar 在 TV 上用方向键只移动滑块而不会真正 seekTo，需自行处理。
+            setOnKeyListener { _, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                val bar = this@apply
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        val step = max(1000, bar.max / 20)
+                        val delta = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) step else -step
+                        val newPos = (bar.progress + delta).coerceIn(0, bar.max)
+                        bar.progress = newPos
+                        runCatching {
+                            player?.seekTo(newPos)
+                            prepareExternalVocal(currentSong, newPos)
+                        }
+                        updateLyricView()
+                        persistRuntimeState()
+                        true
+                    }
+                    else -> false
+                }
+            }
         }
         progressRow.addView(fullScreenSeekBar, LinearLayout.LayoutParams(0, dp(48), 1f))
         fullScreenTime = label("00:00 / 00:00", 14, Color.WHITE).apply {
@@ -2382,6 +2406,13 @@ class MainActivity : AppCompatActivity() {
             )
         )
         fullScreenProgressRow = progressRow
+
+        // 电视遥控器：控制按钮“下”键跳到进度条，进度条“上”键返回控制栏，形成焦点闭环。
+        val seekId = fullScreenSeekBar!!.id
+        controlItems.forEach { it.nextFocusDownId = seekId }
+        fullScreenSeekBar!!.nextFocusUpId =
+            controlItems.getOrNull(2)?.id ?: controlItems.first().id
+        fullScreenSeekBar!!.nextFocusDownId = fullScreenSeekBar!!.id
 
         isFullScreen = true
         fullScreenContainer!!.setVisibility(View.VISIBLE)
@@ -3687,6 +3718,13 @@ class MainActivity : AppCompatActivity() {
         return "{\"ok\":false,\"error\":\"" + e.message.toString().replace("\"", "'") + "\"}"
     }
 
+    /** 仅用于展示的来源标识：本地文件、OpenList 网盘直读、或需要联网下载。 */
+    private fun songSource(song: Song, localFile: Boolean): String = when {
+        localFile -> "local"
+        song.isOpenList() -> "nas"
+        else -> "online"
+    }
+
     @Throws(Exception::class)
     private fun songJson(song: Song): JSONObject {
         val item = JSONObject()
@@ -3696,7 +3734,10 @@ class MainActivity : AppCompatActivity() {
         item.put("category", song.category)
         item.put("language", song.language)
         item.put("remote", song.remote)
-        item.put("local", song.hasLocalFile() || SongOkDownloadManager.isDownloaded(song))
+        val localFile = song.hasLocalFile() || SongOkDownloadManager.isDownloaded(song)
+        item.put("local", localFile)
+        // 仅展示用途：区分网盘直读与仍需下载的在线歌曲，不改变 local 的含义。
+        item.put("source", songSource(song, localFile))
         item.put("favorite", store.isFavorite(song))
         item.put("playCount", song.playCount)
         item.put("hasOriginal", hasUrl(song.originalUrl) || hasUrl(song.originalPath))
@@ -8011,6 +8052,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         // 从数据库查询收藏歌曲
+        val requestVersion = ++browseRequestVersion
         io.execute(Runnable {
             val result: MutableList<Song> = ArrayList<Song>()
             for (songId in store.favoriteIds) {
@@ -8019,6 +8061,7 @@ class MainActivity : AppCompatActivity() {
                 if (song != null) result.add(song)
             }
             main.post(Runnable {
+                if (requestVersion != browseRequestVersion || browseMode != "favorites") return@Runnable
                 visibleSongs.clear()
                 visibleSongs.addAll(result)
                 updateCategories()
@@ -9355,10 +9398,12 @@ class MainActivity : AppCompatActivity() {
     private fun songRowState(song: Song): SongRowState {
         val task = downloads.lastOrNull { stableId(it.song) == stableId(song) }
         val taskState = task?.state.orEmpty()
+        val localFile = song.hasLocalFile()
         return SongRowState(
             current = currentSong?.equals(song) == true,
             queued = orderQueue!!.contains(song) || pendingQueueSongIds.contains(stableId(song)),
-            local = song.hasLocalFile(),
+            local = localFile,
+            source = songSource(song, localFile),
             downloading = !taskState.startsWith("失败") && !taskState.contains("暂停") && isDownloading(song),
             failed = taskState.startsWith("失败"),
             paused = taskState.contains("暂停") || taskState.contains("中断"),

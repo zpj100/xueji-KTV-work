@@ -44,7 +44,12 @@ class LocalRemoteServer(private val context: Context) {
 
     @Synchronized
     fun start(address: String?, callback: Callback): Boolean {
-        if (running && address == boundAddress) return true
+        if (running && server?.isClosed == false && isPrivateIpv4(address)) {
+            this.callback = callback
+            boundAddress = address
+            lastError = null
+            return true
+        }
         stop()
         this.callback = callback
         if (!isPrivateIpv4(address)) {
@@ -55,7 +60,10 @@ class LocalRemoteServer(private val context: Context) {
         var candidate: ServerSocket? = null
         for (port in 8765..8775) {
             try {
-                candidate = ServerSocket(port, 32)
+                candidate = ServerSocket().apply {
+                    reuseAddress = true
+                    bind(java.net.InetSocketAddress(port), 32)
+                }
                 boundPort = port
                 break
             } catch (_: Exception) {
