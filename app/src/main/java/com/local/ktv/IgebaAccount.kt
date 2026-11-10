@@ -133,7 +133,14 @@ internal object IgebaAccount {
             }.toByteArray(Charsets.UTF_8)
             connection.setFixedLengthStreamingMode(body.size)
             connection.outputStream.use { it.write(body) }
-            if (connection.responseCode !in 200..299) throw IOException("账号服务 HTTP ${connection.responseCode}")
+            if (connection.responseCode !in 200..299) {
+                val detail = runCatching {
+                    connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                        ?.trim()?.take(120)
+                }.getOrNull().orEmpty()
+                throw IOException("账号服务 HTTP ${connection.responseCode}" +
+                    if (detail.isNotEmpty()) "（服务端：$detail）" else "")
+            }
             jar.put(target.toURI(), connection.headerFields.filterKeys { it != null })
             return JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
         } finally { connection.disconnect() }
@@ -141,7 +148,7 @@ internal object IgebaAccount {
 
     fun login(account: String, password: String, remember: Boolean = false): Session {
         require(account.isNotBlank() && password.isNotEmpty()) { "请输入账号和密码" }
-        val epoch = synchronized(this) { generation }
+        val epoch = synchronized(this) { ++generation }
         val jar = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER)
         val value = authenticate(account, password, jar)
         val savedCredentials = if (remember) Credentials(account.trim(), password) else null
@@ -156,11 +163,20 @@ internal object IgebaAccount {
     }
 
     private fun authenticate(account: String, password: String, jar: CookieManager): Session {
-        val params = JSONObject().put("UserName", account.trim()).put("Password", password)
+        val trimmed = account.trim()
+        val params = JSONObject().put("UserName", trimmed).put("Password", password)
             .put("ExeInfos", JSONObject().put("MaidongKTV", BuildConfig.VERSION_NAME).toString())
             .put("EnvInfos", JSONObject().put("Os", "Android ${Build.VERSION.RELEASE}").toString())
             .put("PlayerInfos", JSONObject().toString()).put("ReferId", 0)
-        val result = request(IgebaApiClient.ADDRESS_URL, "10.0", "DO_LOGIN", params, jar)
+        val result = try {
+            request(IgebaApiClient.ADDRESS_URL, "10.0", "DO_LOGIN", params, jar)
+        } catch (error: IOException) {
+            // 地址服务对部分网络/设备会直接返回 HTTP 403，账号服务仍提供同一账号体系的登录命令。
+            if (error.message?.contains("HTTP 403") != true) throw error
+            request(REGISTER_URL, "1", "DO_LOGIN", JSONObject()
+                .put("AccountName", trimmed).put("Mobile", trimmed).put("Email", "")
+                .put("Password", password).put("VerifyBy", 0), jar)
+        }
         return parseSession(result)
     }
 
@@ -197,11 +213,20 @@ internal object IgebaAccount {
     }
 
     internal fun parseSession(result: JSONObject): Session {
-        if (result.optInt("Code", -1) <= 0) throw IOException(result.optString("Reason", "登录失败").take(160))
-        val user = result.optJSONObject("UserInfo") ?: throw IOException("登录响应缺少用户信息")
-        val id = user.optLong("UserId", 0)
+        val code = if (result.has("Code")) result.optInt("Code", -1) else result.optInt("Result", -1)
+        if (code <= 0) {
+            val reason = result.optString("Reason").ifEmpty { result.optString("Description") }
+                .ifEmpty { "登录失败" }
+            throw IOException(reason.take(160))
+        }
+        val user = result.optJSONObject("UserInfo") ?: result.optJSONObject("User")
+        val id = user?.optLong("UserId", 0L) ?: result.optLong("UserId", 0L)
         if (id <= 0) throw IOException("登录响应缺少有效账号编号")
-        return Session(id, user.optString("NickName", "i歌霸用户"))
+        val nickname = user?.optString("NickName").orEmpty()
+            .ifEmpty { user?.optString("Nickname").orEmpty() }
+            .ifEmpty { result.optString("NickName") }
+            .ifEmpty { "i歌霸用户" }
+        return Session(id, nickname)
     }
 
     @Synchronized fun remainingSeconds(phone: String): Long =

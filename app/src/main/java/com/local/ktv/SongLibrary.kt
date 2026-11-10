@@ -112,6 +112,9 @@ class SongLibrary {
 
     @Synchronized fun allSongs(): List<Song> = (localSongs + cloudSongs + remoteSongs).distinctBy { KtvStore.stableId(it) }
 
+    /** 本机与网盘歌曲，不含数十万首在线曲目，供“本地”列表避免整库拷贝。 */
+    @Synchronized internal fun nonRemoteSongs(): List<Song> = localSongs + cloudSongs
+
     internal fun localCatalogNumbers(): Set<String> =
         allSongs().asSequence().filter { it.hasLocalFile() }
             .mapNotNull { it.sourceSongNumber?.takeIf(String::isNotBlank) }.toSet()

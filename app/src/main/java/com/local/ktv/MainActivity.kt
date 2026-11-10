@@ -4426,19 +4426,30 @@ class MainActivity : AppCompatActivity() {
             loadBrowsePage()
             return
         }
+        // 曲库库存在时，“全部/网络”改为分页浏览：库里数十万首网络歌曲，
+        // 逐首拼装列表会在 4.4 低内存机器上直接 OOM 退出。
+        if (library.muse.isAvailable() && q.isEmpty() && ("全部" == category || "网络" == category)) {
+            browseMode = "hot"
+            browseParam = ""
+            browsePage = 0
+            loadBrowsePage()
+            return
+        }
         // 数据库不可用或空查询时,回退到本地文件扫描
         val ql = q.lowercase()
         visibleSongs.clear()
-        for (song in library.allSongs()) {
+        val source = if ("本地" == category) library.nonRemoteSongs() else library.allSongs()
+        for (song in source) {
             val categoryOk = "全部" == category
                     || (song.category != null && song.category == category)
                     || ("本地" == category && !song.remote)
                     || ("网络" == category && song.remote)
-            val text =
-                (song.title + " " + song.singer + " " + song.category + " " + song.language + " " + song.pinyin).lowercase()
-            if (isVisibleSong(song) && categoryOk && (ql.isEmpty() || text.contains(ql))) visibleSongs.add(
-                song
-            )
+            if (!isVisibleSong(song) || !categoryOk) continue
+            // 仅在有关键字时才拼接检索文本，避免大曲库空查询时产生海量临时字符串。
+            if (ql.isEmpty() || (song.title + " " + song.singer + " " + song.category + " " +
+                        song.language + " " + song.pinyin).lowercase().contains(ql)) {
+                visibleSongs.add(song)
+            }
         }
         visibleSongs.sortWith(Comparator { a: Song?, b: Song? ->
             (a?.title ?: "").lowercase().compareTo((b?.title ?: "").lowercase())
