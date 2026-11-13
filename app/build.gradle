@@ -19,8 +19,8 @@ android {
         // core library desugaring 在 minSdk < 21 时要求启用 multidex（AGP 硬性检查）。
         // 当前方法数约 1.3 万（单 dex），实际不会分包；开启仅为满足检查并保留 4.x 兼容。
         multiDexEnabled true
-        versionCode 43
-        versionName "2.4.3"
+        versionCode 44
+        versionName "2.4.4"
 
     }
 

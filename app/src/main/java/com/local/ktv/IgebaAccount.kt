@@ -124,6 +124,7 @@ internal object IgebaAccount {
             connection.readTimeout = 30_000
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            connection.setRequestProperty("User-Agent", IgebaApiClient.USER_AGENT)
             jar.get(target.toURI(), emptyMap()).forEach { (key, values) ->
                 if (key.equals("Cookie", true)) connection.setRequestProperty(key, values.joinToString("; "))
             }

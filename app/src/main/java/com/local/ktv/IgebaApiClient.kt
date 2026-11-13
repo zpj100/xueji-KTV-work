@@ -12,6 +12,8 @@ import kotlin.random.Random
 object IgebaApiClient {
     const val CLOUD_URL = "http://app.ige8.net/cloud.php"
     const val ADDRESS_URL = "http://app.ige8.net/telnet.php"
+    /** i歌霸服务端为 Indy(Delphi) HTTP 服务，缺少该 User-Agent 时会直接拒绝连接 / 返回 502，表现为「failed connect to app.ige8.net」。 */
+    const val USER_AGENT = "Mozilla/3.0 (compatible; Indy Library)"
 
     /** 只读取用户自己正常会话提供的身份；缺省为官方匿名值。 */
     fun userId(): Long {
@@ -32,6 +34,7 @@ object IgebaApiClient {
             connection.readTimeout = 40_000
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            connection.setRequestProperty("User-Agent", USER_AGENT)
             IgebaAccount.attach(connection)
             connection.outputStream.use { it.write(body) }
             if (connection.responseCode !in 200..299) throw httpError(connection, address)
