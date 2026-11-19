@@ -405,19 +405,8 @@ object SongOkDownloadManager {
         val attemptStopped = AtomicBoolean(false)
         synchronized(job) { job.inFlight.clear() }
         val userId = IgebaApiClient.userId()
-        // 会话失效时服务端对地址接口直接返回 403：先自动恢复登录一次，避免整批下载被跳过。
-        var address = try {
-            IgebaApiClient.address(number)
-        } catch (error: IOException) {
-            val session = IgebaAccount.session
-            if (error.message?.contains("HTTP 403") != true || session == null ||
-                !IgebaAccount.automaticLoginEnabled) throw error
-            IgebaAccount.relogin(session)
-            android.util.Log.i("SongOkDownload", "地址接口 403，已恢复账号登录后重试，歌曲=$number")
-            IgebaApiClient.address(number)
-        }
+        var address = IgebaApiClient.address(number)
         val addressLock = Any()
-        var addressRefreshes=0
         var exclusive=false
         var mediaTotal: Long? = null
         fun probe(): Block {
@@ -431,30 +420,32 @@ object SongOkDownloadManager {
             mediaTotal=result.total
             return result
         }
+        fun notifyOrder() {
+            val snapshot = java.util.concurrent.FutureTask {
+                orderSnapshot?.invoke().orEmpty()
+                    .filter { it.matches(Regex("\\d{1,16}")) }.toMutableList()
+            }
+            android.os.Handler(android.os.Looper.getMainLooper()).post(snapshot)
+            val orders = snapshot.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            if (number !in orders) orders.add(number)
+            IgebaApiClient.post("NOTIFY_MYORDER", JSONObject()
+                .put("UserId", userId).put("Action", 1)
+                .put("SongNumbers", number).put("Orders", orders.joinToString(",")), true)
+        }
+        val recovery = object {
+            var attempts = 0
+            fun recover(code: Int, detail: String): Boolean {
+                if (code != 403 || !detail.contains("expired", ignoreCase = true) || attempts >= 3) return false
+                attempts++
+                if (attempts == 1 || attempts == 3) notifyOrder()
+                if (job.cancelled.get()) throw IOException("下载已暂停")
+                address = IgebaApiClient.address(number)
+                return true
+            }
+        }
         fun refresh(error: MediaHttpException) {
-            if(error.code != 403 || !error.detail.contains("expired",true) || addressRefreshes >= 3) throw error
-            if(job.cancelled.get()) throw IOException("下载已暂停")
-            addressRefreshes++
-            // 第三次仍然过期说明会话本身已失效，用保存的账号密码自动恢复登录。
-            if (addressRefreshes == 3) {
-                val session = IgebaAccount.session ?: throw IOException("账号已退出，请重新登录后再下载")
-                IgebaAccount.relogin(session)
-                android.util.Log.i("SongOkDownload", "已恢复当前账号登录，重新获取歌曲地址")
-            }
-            if (addressRefreshes == 1 || addressRefreshes == 3) {
-                val snapshot = java.util.concurrent.FutureTask {
-                    orderSnapshot?.invoke().orEmpty()
-                        .filter { it.matches(Regex("\\d{1,16}")) }.toMutableList()
-                }
-                android.os.Handler(android.os.Looper.getMainLooper()).post(snapshot)
-                val orders = snapshot.get(5, java.util.concurrent.TimeUnit.SECONDS)
-                if (number !in orders) orders.add(number)
-                IgebaApiClient.post("NOTIFY_MYORDER", JSONObject()
-                    .put("UserId", userId).put("Action", 1)
-                    .put("SongNumbers", number).put("Orders", orders.joinToString(",")), true)
-            }
-            android.util.Log.i("SongOkDownload", "过期地址刷新，歌曲=$number 次数=$addressRefreshes/3")
-            address=IgebaApiClient.address(number)
+            if (job.cancelled.get()) throw IOException("下载已暂停")
+            if (!recovery.recover(error.code, error.detail)) throw error
         }
         fun retryExpired(request: () -> Block): Block {
             while (true) {
